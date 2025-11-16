@@ -39,7 +39,8 @@ public:
    * @brief Forward propagation through the network
    *
    * @param inputs Input vector (must have size equal to input_size)
-   * @return float Output prediction (sigmoid activated)
+   * @return float Output prediction (linear/unbounded; threshold at 0.5 for
+   * binary classification)
    */
   float forward(const std::vector<float> &inputs) const;
 
@@ -78,7 +79,30 @@ private:
   static std::vector<float> generate_random_weights(size_t size);
 
   /**
+   * @brief ReLU (Rectified Linear Unit) activation function
+   *
+   * @param x Input value
+   * @return float ReLU output: max(0, x)
+   */
+  static float relu(float x);
+
+  /**
+   * @brief Derivative of ReLU function
+   *
+   * @param x Input value
+   * @return float Derivative: 1 if x > 0, else 0
+   */
+  static float relu_derivative(float x);
+
+  /**
    * @brief Sigmoid activation function
+   *
+   * NOTE: Not currently used in training or inference.
+   * Sigmoid requires expensive exponential calculations (std::exp) which are
+   * difficult to implement efficiently in hardware. ReLU is preferred for
+   * hardware implementations due to its simplicity (just a comparator).
+   * Network uses ReLU for hidden layers (hardware-efficient) and linear
+   * activation for output layer (no computation needed).
    *
    * @param x Input value
    * @return float Sigmoid output in range (0, 1)
@@ -87,6 +111,8 @@ private:
 
   /**
    * @brief Derivative of sigmoid function
+   *
+   * NOTE: Not currently used. See sigmoid() comment for details.
    *
    * @param sigmoid_output Output of sigmoid function
    * @return float Derivative value

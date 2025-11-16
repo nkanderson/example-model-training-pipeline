@@ -18,6 +18,15 @@ std::vector<float> MLP::generate_random_weights(size_t size) {
   return weights;
 }
 
+float MLP::relu(float x) { return x > 0.0f ? x : 0.0f; }
+
+float MLP::relu_derivative(float x) { return x > 0.0f ? 1.0f : 0.0f; }
+
+// NOTE: Sigmoid and its derivative are not currently used in training or
+// inference. Sigmoid requires expensive exponential calculations (std::exp)
+// which are difficult to implement efficiently in hardware. ReLU is preferred
+// for hardware implementations due to its simplicity (just a comparator and
+// multiplexer).
 float MLP::sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 float MLP::sigmoid_derivative(float sigmoid_output) {
@@ -108,7 +117,7 @@ float MLP::forward(const std::vector<float> &inputs) const {
     sum += hidden_weights_[i][input_size_];
 
     // Apply activation function
-    hidden_outputs[i] = sigmoid(sum);
+    hidden_outputs[i] = relu(sum);
   }
 
   // Forward propagation through output layer
@@ -122,8 +131,9 @@ float MLP::forward(const std::vector<float> &inputs) const {
   // Add bias (last element in output_weights)
   output_sum += output_weights_[hidden_layer_size_];
 
-  // Apply activation function and return
-  return sigmoid(output_sum);
+  // No activation function on output (linear output for hardware efficiency)
+  // Output can be any value; threshold at 0.5 for binary classification
+  return output_sum;
 }
 
 void MLP::train(const std::vector<std::vector<float>> &training_inputs,
@@ -160,7 +170,7 @@ void MLP::train(const std::vector<std::vector<float>> &training_inputs,
           sum += inputs[j] * hidden_weights_[i][j];
         }
         sum += hidden_weights_[i][input_size_]; // Add bias
-        hidden_outputs[i] = sigmoid(sum);
+        hidden_outputs[i] = relu(sum);
       }
 
       // Compute output
@@ -169,7 +179,7 @@ void MLP::train(const std::vector<std::vector<float>> &training_inputs,
         output_sum += hidden_outputs[i] * output_weights_[i];
       }
       output_sum += output_weights_[hidden_layer_size_]; // Add bias
-      float output = sigmoid(output_sum);
+      float output = output_sum; // Linear output (no activation)
 
       // === Backward Pass ===
       // See Nielsen, "Neural Networks and Deep Learning" (2019), Chapter 2
@@ -180,14 +190,18 @@ void MLP::train(const std::vector<std::vector<float>> &training_inputs,
       // dC/doutput = output - target
       // See equations BP1 and 30 in Nielsen (2019)
       float output_cost = output - target;
-      float output_delta = output_cost * sigmoid_derivative(output);
+      // Applying relu_derivative to the output layer would kill the gradient,
+      // making training impossible.
+      // float output_delta = output_cost * relu_derivative(output_sum);
+      // Linear output has derivative of 1, so output_delta is just the cost
+      float output_delta = output_cost;
 
       // Compute hidden layer errors
       // See equation BP2 in Nielsen (2019)
       std::vector<float> hidden_deltas(hidden_layer_size_);
       for (size_t i = 0; i < hidden_layer_size_; ++i) {
         float error = output_delta * output_weights_[i];
-        hidden_deltas[i] = error * sigmoid_derivative(hidden_outputs[i]);
+        hidden_deltas[i] = error * relu_derivative(hidden_outputs[i]);
       }
 
       // === Update Weights ===
