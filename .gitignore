@@ -11,6 +11,15 @@ build/
 bin/
 lib/
 
+# Verilator output directory
+obj_dir/
+logs/
+
+# Python
+venv/
+__pycache__/
+.pytest_cache
+
 # NOTE: Checking in weights files for now for reproducibility of results.
 # We may want to ignore them in the future depending on overall training pipeline.
 # Generated weight files

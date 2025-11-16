@@ -1,0 +1,54 @@
+[*]
+[*] GTKWave Analyzer v3.4.0 (w)1999-2022 BSI
+[*] Sun Nov 16 22:42:16 2025
+[*]
+[dumpfile] "/Users/nik/Documents/Teuscher-Lab/example-model-training-pipeline/mlp/sv/nn_tb.vcd"
+[dumpfile_mtime] "Sun Nov 16 22:40:56 2025"
+[dumpfile_size] 4986
+[savefile] "/Users/nik/Documents/Teuscher-Lab/example-model-training-pipeline/mlp/sv/xor_sim.gtkw"
+[timestart] 0
+[size] 1424 767
+[pos] 1951 57
+*-3.659333 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] TOP.
+[treeopen] TOP.nn_tb.
+[treeopen] TOP.nn_tb.dut.
+[sst_width] 253
+[signals_width] 251
+[sst_expanded] 1
+[sst_vpaned_height] 217
+@22
+TOP.nn_tb.dut.hidden_0.DATA_WIDTH[31:0]
+TOP.nn_tb.dut.hidden_0.NUM_INPUTS[31:0]
+TOP.nn_tb.dut.hidden_0.bias[15:0]
+@28
+#{TOP.nn_tb.dut.hidden_0.inputs[0:1]} TOP.nn_tb.dut.hidden_0.inputs[0] TOP.nn_tb.dut.hidden_0.inputs[1]
+@22
+TOP.nn_tb.dut.hidden_0.neuron_out[15:0]
+TOP.nn_tb.dut.hidden_0.weighted_sum[15:0]
+TOP.nn_tb.dut.hidden_0.weights[0][15:0]
+TOP.nn_tb.dut.hidden_0.weights[1][15:0]
+TOP.nn_tb.dut.hidden_1.DATA_WIDTH[31:0]
+TOP.nn_tb.dut.hidden_1.NUM_INPUTS[31:0]
+TOP.nn_tb.dut.hidden_1.bias[15:0]
+@28
+#{TOP.nn_tb.dut.hidden_1.inputs[0:1]} TOP.nn_tb.dut.hidden_1.inputs[0] TOP.nn_tb.dut.hidden_1.inputs[1]
+@22
+TOP.nn_tb.dut.hidden_1.neuron_out[15:0]
+TOP.nn_tb.dut.hidden_1.weighted_sum[15:0]
+TOP.nn_tb.dut.hidden_1.weights[0][15:0]
+TOP.nn_tb.dut.hidden_1.weights[1][15:0]
+TOP.nn_tb.dut.output_0.DATA_WIDTH[31:0]
+TOP.nn_tb.dut.output_0.NUM_INPUTS[31:0]
+TOP.nn_tb.dut.output_0.bias[15:0]
+TOP.nn_tb.dut.output_0.bias_extended[31:0]
+TOP.nn_tb.dut.output_0.inputs[0][15:0]
+TOP.nn_tb.dut.output_0.inputs[1][15:0]
+TOP.nn_tb.dut.output_0.neuron_out[15:0]
+TOP.nn_tb.dut.output_0.weighted_sum[15:0]
+TOP.nn_tb.dut.output_0.weighted_sum_extended[31:0]
+TOP.nn_tb.dut.output_0.weighted_sum_shifted[31:0]
+TOP.nn_tb.dut.output_0.weights[0][15:0]
+TOP.nn_tb.dut.output_0.weights[1][15:0]
+[pattern_trace] 1
+[pattern_trace] 0
