@@ -1,0 +1,17 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Compiled Static libraries
+*.a
+*.lib
+
+# Build directories
+build/
+bin/
+lib/
+
+# NOTE: Checking in weights files for now for reproducibility of results.
+# We may want to ignore them in the future depending on overall training pipeline.
+# Generated weight files
+# mlp_*.txt
