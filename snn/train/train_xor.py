@@ -13,13 +13,22 @@ num_steps = 10
 num_epochs = 400
 
 # Device setup
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+device = (
+    torch.device("cuda")
+    if torch.cuda.is_available()
+    else (
+        torch.device("mps")
+        if torch.backends.mps.is_available()
+        else torch.device("cpu")
+    )
+)
 
 # XOR dataset - using static input encoding
 # Each input pattern is presented as a constant value at every time step
 # The SNN integrates this static signal over time through membrane dynamics
-data = torch.tensor([[0., 0.], [0., 1.], [1., 0.], [1., 1.]], device=device)
-targets = torch.tensor([[0.], [1.], [1.], [0.]], device=device)
+data = torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], device=device)
+targets = torch.tensor([[0.0], [1.0], [1.0], [0.0]], device=device)
+
 
 # Define Network
 class Net(nn.Module):
@@ -39,10 +48,10 @@ class Net(nn.Module):
         # Initialize membrane potentials
         mem1 = self.lif1.init_leaky()
         mem2 = self.lif2.init_leaky()
-        
+
         spk2_rec = []
         mem2_rec = []
-        
+
         for step in range(num_steps):
             cur1 = self.fc1(x)
             spk1, mem1 = self.lif1(cur1, mem1)
@@ -53,6 +62,7 @@ class Net(nn.Module):
             mem2_rec.append(mem2)
 
         return torch.stack(spk2_rec, dim=0), torch.stack(mem2_rec, dim=0)
+
 
 # Initialize network, loss, and optimizer
 net = Net().to(device)
@@ -68,16 +78,16 @@ optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
 # Training loop
 for epoch in range(num_epochs):
     optimizer.zero_grad()
-    
+
     spk_rec, mem_rec = net(data)
-    
+
     # Compute spike count and compare to targets
     spike_count = spk_rec.sum(dim=0)  # Sum over time steps
     loss = loss_fn(spike_count, targets)
-    
+
     loss.backward()
     optimizer.step()
-    
+
     if epoch % 100 == 0:
         print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
 
@@ -88,4 +98,6 @@ with torch.no_grad():
     print("\nFinal Results:")
     print("Inputs -> Spike Count -> Target")
     for i in range(batch_size):
-        print(f"{data[i].cpu().numpy()} -> {spike_count[i].item():.2f} -> {targets[i].item()}")
+        print(
+            f"{data[i].cpu().numpy()} -> {spike_count[i].item():.2f} -> {targets[i].item()}"
+        )
