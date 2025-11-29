@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import snntorch as snn
 from snntorch import surrogate
+from pathlib import Path
 
 beta = 0.5
 
@@ -10,7 +11,7 @@ num_inputs = 2
 num_hidden = 2
 num_outputs = 1
 num_steps = 10
-num_epochs = 400
+num_epochs = 750
 
 # Device setup
 device = (
@@ -101,3 +102,10 @@ with torch.no_grad():
         print(
             f"{data[i].cpu().numpy()} -> {spike_count[i].item():.2f} -> {targets[i].item()}"
         )
+
+# Save model weights
+weights_dir = Path("./weights")
+weights_dir.mkdir(parents=True, exist_ok=True)
+weights_path = weights_dir / "snn_xor_weights.pth"
+torch.save(net.state_dict(), weights_path)
+print(f"\nModel weights saved to {weights_path}")
