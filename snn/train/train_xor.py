@@ -65,47 +65,48 @@ class Net(nn.Module):
         return torch.stack(spk2_rec, dim=0), torch.stack(mem2_rec, dim=0)
 
 
-# Initialize network, loss, and optimizer
-net = Net().to(device)
+if __name__ == "__main__":
+    # Initialize network, loss, and optimizer
+    net = Net().to(device)
 
-# Using standard MSELoss instead of SF.mse_count_loss because:
-# - XOR is a regression task (binary outputs 0/1), not classification
-# - SF.mse_count_loss expects multi-class targets with one-hot encoding
-# - Plain MSE on spike counts is simpler and works well for this task
-# - Surrogate gradients still apply automatically through the Leaky neurons
-loss_fn = nn.MSELoss()
-optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
+    # Using standard MSELoss instead of SF.mse_count_loss because:
+    # - XOR is a regression task (binary outputs 0/1), not classification
+    # - SF.mse_count_loss expects multi-class targets with one-hot encoding
+    # - Plain MSE on spike counts is simpler and works well for this task
+    # - Surrogate gradients still apply automatically through the Leaky neurons
+    loss_fn = nn.MSELoss()
+    optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
 
-# Training loop
-for epoch in range(num_epochs):
-    optimizer.zero_grad()
+    # Training loop
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
 
-    spk_rec, mem_rec = net(data)
+        spk_rec, mem_rec = net(data)
 
-    # Compute spike count and compare to targets
-    spike_count = spk_rec.sum(dim=0)  # Sum over time steps
-    loss = loss_fn(spike_count, targets)
+        # Compute spike count and compare to targets
+        spike_count = spk_rec.sum(dim=0)  # Sum over time steps
+        loss = loss_fn(spike_count, targets)
 
-    loss.backward()
-    optimizer.step()
+        loss.backward()
+        optimizer.step()
 
-    if epoch % 100 == 0:
-        print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
 
-# Test the network
-with torch.no_grad():
-    spk_rec, mem_rec = net(data)
-    spike_count = spk_rec.sum(dim=0)
-    print("\nFinal Results:")
-    print("Inputs -> Spike Count -> Target")
-    for i in range(batch_size):
-        print(
-            f"{data[i].cpu().numpy()} -> {spike_count[i].item():.2f} -> {targets[i].item()}"
-        )
+    # Test the network
+    with torch.no_grad():
+        spk_rec, mem_rec = net(data)
+        spike_count = spk_rec.sum(dim=0)
+        print("\nFinal Results:")
+        print("Inputs -> Spike Count -> Target")
+        for i in range(batch_size):
+            print(
+                f"{data[i].cpu().numpy()} -> {spike_count[i].item():.2f} -> {targets[i].item()}"
+            )
 
-# Save model weights
-weights_dir = Path("./weights")
-weights_dir.mkdir(parents=True, exist_ok=True)
-weights_path = weights_dir / "snn_xor_weights.pth"
-torch.save(net.state_dict(), weights_path)
-print(f"\nModel weights saved to {weights_path}")
+    # Save model weights
+    weights_dir = Path("./weights")
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    weights_path = weights_dir / "snn_xor_weights.pth"
+    torch.save(net.state_dict(), weights_path)
+    print(f"\nModel weights saved to {weights_path}")
