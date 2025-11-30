@@ -1,0 +1,156 @@
+[*]
+[*] GTKWave Analyzer v3.4.0 (w)1999-2022 BSI
+[*] Sun Nov 30 21:42:25 2025
+[*]
+[dumpfile] "/Users/nik/Documents/Teuscher-Lab/example-model-training-pipeline/snn/sv/dump.vcd"
+[dumpfile_mtime] "Sun Nov 30 21:41:21 2025"
+[dumpfile_size] 17038
+[savefile] "/Users/nik/Documents/Teuscher-Lab/example-model-training-pipeline/snn/sv/wave.gtkw"
+[timestart] 58100
+[size] 1776 996
+[pos] 2019 -1
+*-15.000000 90100 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] neural_network_tb.
+[treeopen] neural_network_tb.dut.
+[sst_width] 253
+[signals_width] 279
+[sst_expanded] 1
+[sst_vpaned_height] 427
+@22
+[color] 5
+neural_network_tb.dut.hidden_w0_temp[0][7:0]
+[color] 5
+neural_network_tb.dut.hidden_w0_temp[1][7:0]
+[color] 5
+neural_network_tb.dut.hidden_w1_temp[0][7:0]
+[color] 5
+neural_network_tb.dut.hidden_w1_temp[1][7:0]
+[color] 5
+neural_network_tb.cycle_count[31:0]
+@28
+[color] 5
+neural_network_tb.done
+@22
+[color] 5
+neural_network_tb.test_num[31:0]
+@24
+[color] 5
+neural_network_tb.dut.NUM_TIMESTEPS[31:0]
+@28
+[color] 5
+neural_network_tb.dut.next_state[1:0]
+[color] 5
+neural_network_tb.dut.state[1:0]
+[color] 5
+neural_network_tb.start
+neural_network_tb.dut.enable
+neural_network_tb.dut.reset
+@24
+neural_network_tb.dut.spike_count[7:0]
+neural_network_tb.dut.timestep_counter[4:0]
+@28
+neural_network_tb.dut.hidden_lif_0.clk
+neural_network_tb.dut.output_spike
+neural_network_tb.dut.inputs[1:0]
+@420
+[color] 3
+neural_network_tb.dut.hidden_biases[0][7:0]
+[color] 3
+neural_network_tb.dut.hidden_weights[0][0][7:0]
+[color] 3
+neural_network_tb.dut.hidden_weights[0][1][7:0]
+[color] 3
+neural_network_tb.dut.hidden_current[0][7:0]
+[color] 3
+neural_network_tb.dut.hidden_lif_0.current[7:0]
+@22
+[color] 3
+neural_network_tb.dut.hidden_lif_0.current_extended[15:0]
+@420
+[color] 3
+neural_network_tb.dut.hidden_lif_0.decay_potential[15:0]
+@22
+[color] 3
+neural_network_tb.dut.hidden_lif_0.decay_temp[23:0]
+@420
+[color] 3
+neural_network_tb.dut.hidden_lif_0.membrane_potential[15:0]
+[color] 3
+neural_network_tb.dut.hidden_lif_0.next_membrane[15:0]
+@22
+[color] 3
+neural_network_tb.dut.hidden_lif_0.refractory_counter[3:0]
+@28
+[color] 3
+neural_network_tb.dut.hidden_lif_0.reset
+[color] 3
+neural_network_tb.dut.hidden_lif_0.spike
+@420
+[color] 1
+neural_network_tb.dut.hidden_biases[1][7:0]
+[color] 1
+neural_network_tb.dut.hidden_weights[1][0][7:0]
+[color] 1
+neural_network_tb.dut.hidden_weights[1][1][7:0]
+[color] 1
+neural_network_tb.dut.hidden_current[1][7:0]
+[color] 1
+neural_network_tb.dut.hidden_lif_1.current[7:0]
+@22
+[color] 1
+neural_network_tb.dut.hidden_lif_1.current_extended[15:0]
+@420
+[color] 1
+neural_network_tb.dut.hidden_lif_1.decay_potential[15:0]
+@22
+[color] 1
+neural_network_tb.dut.hidden_lif_1.decay_temp[23:0]
+@420
+[color] 1
+neural_network_tb.dut.hidden_lif_1.membrane_potential[15:0]
+[color] 1
+neural_network_tb.dut.hidden_lif_1.next_membrane[15:0]
+@22
+[color] 1
+neural_network_tb.dut.hidden_lif_1.refractory_counter[3:0]
+@28
+[color] 1
+neural_network_tb.dut.hidden_lif_1.reset
+[color] 1
+neural_network_tb.dut.hidden_lif_1.spike
+#{neural_network_tb.dut.hidden_spike[0:1]} neural_network_tb.dut.hidden_spike[0] neural_network_tb.dut.hidden_spike[1]
+@420
+[color] 7
+neural_network_tb.dut.output_bias[0][7:0]
+[color] 7
+neural_network_tb.dut.output_weights[0][7:0]
+[color] 7
+neural_network_tb.dut.output_weights[1][7:0]
+[color] 7
+neural_network_tb.dut.output_current[7:0]
+[color] 7
+neural_network_tb.dut.output_lif.current[7:0]
+@22
+[color] 7
+neural_network_tb.dut.output_lif.current_extended[15:0]
+@421
+[color] 7
+neural_network_tb.dut.output_lif.decay_potential[15:0]
+@22
+[color] 7
+neural_network_tb.dut.output_lif.decay_temp[23:0]
+@420
+[color] 7
+neural_network_tb.dut.output_lif.membrane_potential[15:0]
+[color] 7
+neural_network_tb.dut.output_lif.next_membrane[15:0]
+@22
+[color] 7
+neural_network_tb.dut.output_lif.refractory_counter[3:0]
+@28
+[color] 7
+neural_network_tb.dut.output_lif.reset
+[color] 7
+neural_network_tb.dut.output_lif.spike
+[pattern_trace] 1
+[pattern_trace] 0

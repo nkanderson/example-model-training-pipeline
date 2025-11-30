@@ -15,6 +15,9 @@ lib/
 obj_dir/
 logs/
 
+# cocotb
+sim_build/
+
 # Python
 venv/
 __pycache__/
