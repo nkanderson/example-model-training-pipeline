@@ -1,0 +1,13 @@
+# Ignore build artifacts and test results
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Simulation outputs
+results/
+*.vcd
+*.fst
+*.xml
+
+# Docker volumes (if using local volumes)
+.docker-volumes/
