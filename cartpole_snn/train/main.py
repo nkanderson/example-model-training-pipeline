@@ -6,7 +6,6 @@ import torch.optim as optim
 from snntorch import surrogate
 from snn_policy import SNNPolicy
 from dqn_agent import DQNAgent, ReplayMemory
-import matplotlib
 import matplotlib.pyplot as plt
 from itertools import count
 import random
@@ -72,32 +71,34 @@ def select_action(state, steps_done, policy_net, device):
 
 
 # TODO: Consider creating a plotting util module
-def plot_durations(show_result=False):
-    # set up matplotlib
-    is_ipython = "inline" in matplotlib.get_backend()
+def plot_durations(episode_durations, show_result=False):
+    """
+    Plot episode durations and running average.
+
+    Args:
+        episode_durations: List of episode durations (number of steps per episode)
+        show_result: If True, displays final result. If False, shows live training progress.
+    """
     plt.figure(1)
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
-        plt.title("Result")
+        plt.title("SNN Training Results")
     else:
         plt.clf()
-        plt.title("Training...")
+        plt.title("In-progress SNN Training...")
     plt.xlabel("Episode")
     plt.ylabel("Duration")
     plt.plot(durations_t.numpy())
-    # Take 100 episode averages and plot them too
+
+    # Plot 100-episode moving average
     if len(durations_t) >= 100:
         means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
         means = torch.cat((torch.zeros(99), means))
         plt.plot(means.numpy())
 
+    # For live updates: brief pause to update the plot
+    # For final results: this ensures the plot is rendered before plt.show()
     plt.pause(0.001)
-    if is_ipython:
-        from IPython import display
-
-        display.display(plt.gcf())
-        if not show_result:
-            display.clear_output(wait=True)
 
 
 # -----------------------
@@ -322,7 +323,9 @@ if __name__ == "__main__":
             if done:
                 episode_durations.append(t + 1)
                 if human_render:
-                    plot_durations()  # Only update plot live if human_render is enabled
+                    plot_durations(
+                        episode_durations
+                    )  # Only update plot live if human_render is enabled
 
                 # Check if this is the best model so far (save only when we beat the record)
                 if len(episode_durations) >= 100:
@@ -357,5 +360,5 @@ if __name__ == "__main__":
 
     if human_render:
         plt.ioff()  # Turn off interactive mode
-    plot_durations(show_result=True)  # Always show final result
+    plot_durations(episode_durations, show_result=True)  # Always show final result
     plt.show()
