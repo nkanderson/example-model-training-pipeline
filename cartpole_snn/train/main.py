@@ -218,9 +218,13 @@ if __name__ == "__main__":
     # Training parameters
     best_avg_reward = 0
 
+    # Create models directory if it doesn't exist
+    models_dir = Path("models")
+    models_dir.mkdir(exist_ok=True)
+
     # Generate model filenames based on config name
-    best_model_filename = f"dqn_{config_name}-best.pth"
-    final_model_filename = f"dqn_{config_name}-final.pth"
+    best_model_filename = str(models_dir / f"dqn_{config_name}-best.pth")
+    final_model_filename = str(models_dir / f"dqn_{config_name}-final.pth")
 
     #
     # Section 2: Initialize policy and target nets, optimizer, replay memory,
@@ -373,7 +377,7 @@ if __name__ == "__main__":
     #
     # Section 5: Save final model
     #
-    final_avg = sum(episode_durations[-min(len(episode_durations), 100) :]) / min(
+    final_avg = sum(episode_durations[-min(len(episode_durations), 100):]) / min(
         len(episode_durations), 100
     )
     # Update agent's episode and avg_reward before saving
