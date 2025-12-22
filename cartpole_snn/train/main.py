@@ -184,7 +184,6 @@ if __name__ == "__main__":
 
     # Training parameters
     best_avg_reward = 0
-    best_model_filename = "best_snn_dqn_cartpole.pth"  # Fixed filename, will overwrite
 
     # Set number of episodes based on hardware acceleration
     if hw_acceleration and (
@@ -193,6 +192,10 @@ if __name__ == "__main__":
         num_episodes = 600
     else:
         num_episodes = 200
+
+    # Generate model filenames based on parameters
+    best_model_filename = f"dqn_{neuron_type}_{num_episodes}-best.pth"
+    final_model_filename = f"dqn_{neuron_type}_{num_episodes}-final.pth"
 
     #
     # Section 2: Initialize policy and target nets, optimizer, replay memory,
@@ -349,7 +352,7 @@ if __name__ == "__main__":
     # Update agent's episode and avg_reward before saving
     agent.episode = start_episode + num_episodes - 1
     agent.avg_reward = final_avg
-    final_model_file = agent.save("final_snn_dqn_cartpole.pth")
+    final_model_file = agent.save(final_model_filename)
 
     print("Complete")
     print(f"Final model saved to: {final_model_file}")
