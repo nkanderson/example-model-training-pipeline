@@ -1,6 +1,6 @@
 // Leaky Integrate-and-Fire (LIF) Neuron Module
 // Implements a spiking neuron with membrane potential integration, leak, and reset
-// Uses multiplicative decay matching simplied snnTorch without current scaling:
+// Uses multiplicative decay matching simplified snnTorch without current scaling:
 // mem = beta * mem + current
 
 module lif #(

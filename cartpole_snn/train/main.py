@@ -1,5 +1,7 @@
 import argparse
 import math
+import yaml
+from pathlib import Path
 import gymnasium as gym
 import torch
 import torch.optim as optim
@@ -10,54 +12,45 @@ import matplotlib.pyplot as plt
 from itertools import count
 import random
 
-# -----------------------
-# Hyperparameters
-# -----------------------
-# BATCH_SIZE is the number of transitions sampled from the replay buffer
-# GAMMA is the discount factor
-# EPS_START is the starting value of epsilon
-# EPS_END is the final value of epsilon, or minimum exploration probability
-# EPS_DECAY controls the rate of exponential decay of epsilon, higher means a slower decay (longer exploration)
-# - If set too low, the agent may not explore enough and get stuck in suboptimal policies
-# TAU is the update rate of the target network
-# LR is the learning rate of the ``AdamW`` optimizer
-# TODO: Consider moving the hyperparameters to a config file.
-BATCH_SIZE = 128
-GAMMA = 0.99
-EPS_START = 0.9
-EPS_END = 0.01
-EPS_DECAY = 2500
-TAU = 0.005  # soft update rate for target network
-LR = 3e-4
-
-# TODO: Get this from the env.action_sapce.n, and len(state) instead of hardcoding
-# Create networks
+# TODO: Get this from the env.action_space.n, and len(state) instead of hardcoding
+# Network dimensions
 n_actions = 2  # CartPole has 2 actions: left (0) and right (1)
 n_observations = (
     4  # CartPole has 4 observations: [position, velocity, angle, angular_velocity]
 )
 
-# SNN params
-NUM_STEPS = 30  # simulation timesteps per env step (tunable)
-BETA = 0.9
-# optional surrogate: snn.surrogate.fast_sigmoid() or similar
-spike_grad = surrogate.fast_sigmoid(slope=25)
+
+def load_config(config_path):
+    """Load hyperparameters from YAML config file."""
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config
 
 
 # TODO: Consider moving this to a method of the DQNAgent class
-# Select an action using epsilon-greedy policy
-def select_action(state, steps_done, policy_net, device):
+def select_action(state, steps_done, policy_net, device, eps_start, eps_end, eps_decay):
     """
-    state: tensor shape [1, n_observations] on device
-    returns action tensor shape [1,1]
+    Select an action using epsilon-greedy policy.
+
+    Args:
+        state: tensor shape [1, n_observations] on device
+        steps_done: number of steps taken so far
+        policy_net: policy network for action selection
+        device: torch device
+        eps_start: starting epsilon value
+        eps_end: minimum epsilon value
+        eps_decay: epsilon decay rate
+
+    Returns:
+        action tensor shape [1,1]
     """
     sample = random.random()
-    # Expotential decay of epsilon
-    # math.exp(-1.0 * steps_done / EPS_DECAY) is the decay factor, which starts
+    # Exponential decay of epsilon
+    # math.exp(-1.0 * steps_done / eps_decay) is the decay factor, which starts
     # at 1.0 when steps_done is 0, and approaches 0 as steps_done -> infinity.
-    # This value should decay from EPS_START to EPS_END following an exponential curve.
-    eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(
-        -1.0 * steps_done / EPS_DECAY
+    # This value should decay from eps_start to eps_end following an exponential curve.
+    eps_threshold = eps_end + (eps_start - eps_end) * math.exp(
+        -1.0 * steps_done / eps_decay
     )
     if sample > eps_threshold:
         with torch.no_grad():
@@ -112,14 +105,24 @@ if __name__ == "__main__":
         description="Train or evaluate an SNN-based DQN agent on CartPole"
     )
 
+    # Configuration
+    parser.add_argument(
+        "--config",
+        "-c",
+        type=str,
+        default="configs/config-baseline.yaml",
+        help="Path to YAML configuration file (default: configs/config-baseline.yaml)",
+    )
+
     # Model configuration
+    # Note: --neuron-type on the command line overrides config file value
     parser.add_argument(
         "--neuron-type",
         "-n",
         type=str,
-        default="leaky",
+        default=None,
         choices=["leaky", "leakysv"],
-        help="Type of spiking neuron to use (default: leaky)",
+        help="Type of spiking neuron to use (overrides config if specified)",
     )
 
     # Training/loading options
@@ -154,12 +157,40 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Apply parsed arguments
-    neuron_type = args.neuron_type
+    # Load configuration file
+    # TODO: In the future, allow command-line arguments to override config values
+    config = load_config(args.config)
+    config_name = Path(
+        args.config
+    ).stem  # Extract name for model filenames (e.g., "config-baseline")
+
+    # Extract hyperparameters from config
+    batch_size = config["training"]["batch_size"]
+    gamma = config["training"]["gamma"]
+    eps_start = config["training"]["eps_start"]
+    eps_end = config["training"]["eps_end"]
+    eps_decay = config["training"]["eps_decay"]
+    tau = config["training"]["tau"]
+    lr = config["training"]["lr"]
+    num_episodes = config["training"]["num_episodes"]
+
+    num_steps = config["snn"]["num_steps"]
+    beta = config["snn"]["beta"]
+    surrogate_gradient_slope = config["snn"]["surrogate_gradient_slope"]
+    neuron_type = config["snn"]["neuron_type"]
+
+    # Command-line args override config (for neuron_type)
+    if args.neuron_type is not None:
+        neuron_type = args.neuron_type
+
+    # Apply other parsed arguments
     pretrained_file = args.load
     evaluate_only = args.evaluate_only
     hw_acceleration = args.hw_acceleration
     human_render = args.human_render
+
+    # Create surrogate gradient function
+    spike_grad = surrogate.fast_sigmoid(slope=surrogate_gradient_slope)
 
     #
     # Section 1: Initialize plotting, device, default params, and basic training variables
@@ -177,7 +208,9 @@ if __name__ == "__main__":
         device = torch.device("cpu")
 
     print(f"Using device: {device}")
+    print(f"Using config: {config_name}")
     print(f"Using neuron type: {neuron_type}")
+    print(f"Training for {num_episodes} episodes")
 
     episode_durations = []
     steps_done = 0
@@ -185,17 +218,9 @@ if __name__ == "__main__":
     # Training parameters
     best_avg_reward = 0
 
-    # Set number of episodes based on hardware acceleration
-    if hw_acceleration and (
-        torch.cuda.is_available() or torch.backends.mps.is_available()
-    ):
-        num_episodes = 600
-    else:
-        num_episodes = 200
-
-    # Generate model filenames based on parameters
-    best_model_filename = f"dqn_{neuron_type}_{num_episodes}-best.pth"
-    final_model_filename = f"dqn_{neuron_type}_{num_episodes}-final.pth"
+    # Generate model filenames based on config name
+    best_model_filename = f"dqn_{config_name}-best.pth"
+    final_model_filename = f"dqn_{config_name}-final.pth"
 
     #
     # Section 2: Initialize policy and target nets, optimizer, replay memory,
@@ -208,22 +233,22 @@ if __name__ == "__main__":
     policy_net = SNNPolicy(
         n_observations,
         n_actions,
-        num_steps=NUM_STEPS,
-        beta=BETA,
+        num_steps=num_steps,
+        beta=beta,
         spike_grad=spike_grad,
         neuron_type=neuron_type,
     ).to(device)
     target_net = SNNPolicy(
         n_observations,
         n_actions,
-        num_steps=NUM_STEPS,
-        beta=BETA,
+        num_steps=num_steps,
+        beta=beta,
         spike_grad=spike_grad,
         neuron_type=neuron_type,
     ).to(device)
 
     # Create optimizer
-    optimizer = optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
+    optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
 
     #
     # Section 3: If needed, load networks and optimizer
@@ -274,8 +299,8 @@ if __name__ == "__main__":
             memory=memory,
             n_observations=n_observations,
             n_actions=n_actions,
-            num_steps=NUM_STEPS,
-            beta=BETA,
+            num_steps=num_steps,
+            beta=beta,
             neuron_type=neuron_type,
             device=device,
             episode=0,
@@ -292,7 +317,9 @@ if __name__ == "__main__":
         )  # [1, obs]
 
         for t in count():
-            action = select_action(state, steps_done, policy_net, device)
+            action = select_action(
+                state, steps_done, policy_net, device, eps_start, eps_end, eps_decay
+            )
             steps_done += 1
             observation, reward, terminated, truncated, _ = env.step(action.item())
             reward = torch.tensor([reward], device=device, dtype=torch.float32)
@@ -312,7 +339,7 @@ if __name__ == "__main__":
             state = next_state
 
             # optimization step (on the policy network)
-            agent.optimize(batch_size=BATCH_SIZE, gamma=GAMMA)
+            agent.optimize(batch_size=batch_size, gamma=gamma)
 
             # Soft update target network: θ' <- τ θ + (1 − τ) θ'
             target_net_state_dict = target_net.state_dict()
@@ -320,7 +347,7 @@ if __name__ == "__main__":
             for key in policy_net_state_dict:
                 target_net_state_dict[key] = policy_net_state_dict[
                     key
-                ] * TAU + target_net_state_dict[key] * (1 - TAU)
+                ] * tau + target_net_state_dict[key] * (1 - tau)
             target_net.load_state_dict(target_net_state_dict)
 
             if done:
