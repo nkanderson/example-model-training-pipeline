@@ -1,5 +1,6 @@
 import argparse
 import math
+import os
 import yaml
 from pathlib import Path
 import gymnasium as gym
@@ -8,6 +9,10 @@ import torch.optim as optim
 from snntorch import surrogate
 from snn_policy import SNNPolicy
 from dqn_agent import DQNAgent, ReplayMemory
+import matplotlib
+# Use non-interactive backend if no display is available (e.g., headless/tmux)
+if not os.environ.get('DISPLAY'):
+    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from itertools import count
 import random
@@ -395,4 +400,12 @@ if __name__ == "__main__":
     if human_render:
         plt.ioff()  # Turn off interactive mode
     plot_durations(episode_durations, show_result=True)  # Always show final result
-    plt.show()
+
+    # Save plot to file (works in headless mode), and show if display is available
+    plot_filename = f"images/{config_name}.png"
+    Path("images").mkdir(exist_ok=True)
+    plt.savefig(plot_filename)
+    print(f"Training plot saved to: {plot_filename}")
+
+    if os.environ.get('DISPLAY') or human_render:
+        plt.show()
