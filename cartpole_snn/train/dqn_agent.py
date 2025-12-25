@@ -187,7 +187,10 @@ class DQNAgent:
         # Load network states
         policy_net.load_state_dict(checkpoint["policy_net_state_dict"])
         target_net.load_state_dict(checkpoint["target_net_state_dict"])
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        # Load optimizer state if available (not present in quantized exports)
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
         # Create agent with loaded config and state
         config = checkpoint["config"]
