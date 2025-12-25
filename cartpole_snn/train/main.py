@@ -102,6 +102,9 @@ def plot_durations(episode_durations, show_result=False):
 # -----------------------
 # Optionally load a model, then train
 # -----------------------
+# TODO: Consider quantization-aware training to gain greater accuracy with
+# lower bit-width weights. Currently, 8 bits does not appear to be sufficient
+# for parity in performance between full-precision and quantized models.
 if __name__ == "__main__":
     #
     # Section 0: Parse command line arguments
@@ -215,7 +218,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     print(f"Using config: {config_name}")
     print(f"Using neuron type: {neuron_type}")
-    print(f"Training for {num_episodes} episodes")
+    mode = "Running" if evaluate_only else "Training"
+    print(f"{mode} for {num_episodes} episodes")
 
     episode_durations = []
     steps_done = 0
