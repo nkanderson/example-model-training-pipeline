@@ -18,3 +18,5 @@ snn:
   beta: 0.9 # LIF neuron membrane decay rate
   surrogate_gradient_slope: 25 # Slope for fast_sigmoid surrogate gradient
   neuron_type: leaky # Neuron type: 'leaky' or 'leakysv'
+  hidden1_size: 128 # Neurons in first hidden layer
+  hidden2_size: 128 # Neurons in second hidden layer

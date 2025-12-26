@@ -186,6 +186,8 @@ if __name__ == "__main__":
     beta = config["snn"]["beta"]
     surrogate_gradient_slope = config["snn"]["surrogate_gradient_slope"]
     neuron_type = config["snn"]["neuron_type"]
+    hidden1_size = config["snn"]["hidden1_size"]
+    hidden2_size = config["snn"]["hidden2_size"]
 
     # Command-line args override config (for neuron_type)
     if args.neuron_type is not None:
@@ -250,6 +252,8 @@ if __name__ == "__main__":
         beta=beta,
         spike_grad=spike_grad,
         neuron_type=neuron_type,
+        hidden1_size=hidden1_size,
+        hidden2_size=hidden2_size,
     ).to(device)
     target_net = SNNPolicy(
         n_observations,
@@ -258,6 +262,8 @@ if __name__ == "__main__":
         beta=beta,
         spike_grad=spike_grad,
         neuron_type=neuron_type,
+        hidden1_size=hidden1_size,
+        hidden2_size=hidden2_size,
     ).to(device)
 
     # Create optimizer

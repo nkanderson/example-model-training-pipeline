@@ -13,9 +13,9 @@ class SNNPolicy(nn.Module):
     timesteps, with spikes accumulated to produce final Q-value estimates.
 
     Architecture:
-        - Input layer: Linear transformation of observations to 128 features
-        - Hidden layer 1: 128 spiking neurons (LIF)
-        - Hidden layer 2: 128 spiking neurons (LIF)
+        - Input layer: Linear transformation of observations to hidden1_size features
+        - Hidden layer 1: hidden1_size spiking neurons (LIF)
+        - Hidden layer 2: hidden2_size spiking neurons (LIF)
         - Output layer: Linear transformation to Q-values (one per action)
 
     The network processes the same input observation for `num_steps` timesteps,
@@ -31,20 +31,26 @@ class SNNPolicy(nn.Module):
         beta=0.9,
         spike_grad=None,
         neuron_type="leaky",
+        hidden1_size=128,
+        hidden2_size=128,
     ):
         """
         - num_steps: number of timesteps to simulate the SNN per environment step
         - beta: membrane decay for LIF
         - spike_grad: surrogate gradient function from snntorch.surrogate (optional)
         - neuron_type: "leakysv" or "leaky" - type of spiking neuron to use
+        - hidden1_size: number of neurons in first hidden layer (default: 128)
+        - hidden2_size: number of neurons in second hidden layer (default: 128)
         """
         super().__init__()
         self.num_steps = num_steps
         self.n_actions = n_actions
         self.neuron_type = neuron_type
+        self.hidden1_size = hidden1_size
+        self.hidden2_size = hidden2_size
 
         # feedforward linear layers
-        self.fc1 = nn.Linear(n_observations, 128)
+        self.fc1 = nn.Linear(n_observations, hidden1_size)
 
         # Create neurons based on type
         if neuron_type == "leaky":
@@ -55,9 +61,9 @@ class SNNPolicy(nn.Module):
         else:
             raise ValueError(f"Unknown neuron type: {neuron_type}")
 
-        self.fc2 = nn.Linear(128, 128)
+        self.fc2 = nn.Linear(hidden1_size, hidden2_size)
         # decode membrane potential to Q-values per timestep
-        self.fc_out = nn.Linear(128, n_actions)
+        self.fc_out = nn.Linear(hidden2_size, n_actions)
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         """
