@@ -1,5 +1,5 @@
 # Baseline configuration for SNN-DQN on CartPole-v1
-# This config uses the original hardcoded values as a baseline
+# This config has higher exploration (slower epsilon decay) than the baseline
 
 training:
   batch_size: 128 # Transitions sampled from replay buffer

@@ -1,5 +1,6 @@
 # Baseline configuration for SNN-DQN on CartPole-v1
-# This config uses the original hardcoded values as a baseline
+# This config has lower tau value than the baseline
+# NOTE: Failed to match baseline performance in testing
 
 training:
   batch_size: 128 # Transitions sampled from replay buffer
