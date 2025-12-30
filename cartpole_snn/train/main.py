@@ -129,7 +129,7 @@ if __name__ == "__main__":
         "-n",
         type=str,
         default=None,
-        choices=["leaky", "leakysv"],
+        choices=["leaky", "leakysv", "fractional"],
         help="Type of spiking neuron to use (overrides config if specified)",
     )
 
@@ -189,6 +189,12 @@ if __name__ == "__main__":
     hidden1_size = config["snn"]["hidden1_size"]
     hidden2_size = config["snn"]["hidden2_size"]
 
+    # Fractional-order LIF parameters (optional, used only if neuron_type == "fractional")
+    alpha = config["snn"].get("alpha", 0.5)
+    lam = config["snn"].get("lam", 0.111)
+    history_length = config["snn"].get("history_length", 256)
+    dt = config["snn"].get("dt", 1.0)
+
     # Command-line args override config (for neuron_type)
     if args.neuron_type is not None:
         neuron_type = args.neuron_type
@@ -220,6 +226,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     print(f"Using config: {config_name}")
     print(f"Using neuron type: {neuron_type}")
+    if neuron_type == "fractional":
+        print(f"  Fractional parameters: alpha={alpha}, lam={lam}, history_length={history_length}, dt={dt}")
     mode = "Running" if evaluate_only else "Training"
     print(f"{mode} for {num_episodes} episodes")
 
@@ -254,6 +262,10 @@ if __name__ == "__main__":
         neuron_type=neuron_type,
         hidden1_size=hidden1_size,
         hidden2_size=hidden2_size,
+        alpha=alpha,
+        lam=lam,
+        history_length=history_length,
+        dt=dt,
     ).to(device)
     target_net = SNNPolicy(
         n_observations,
@@ -264,6 +276,10 @@ if __name__ == "__main__":
         neuron_type=neuron_type,
         hidden1_size=hidden1_size,
         hidden2_size=hidden2_size,
+        alpha=alpha,
+        lam=lam,
+        history_length=history_length,
+        dt=dt,
     ).to(device)
 
     # Create optimizer
