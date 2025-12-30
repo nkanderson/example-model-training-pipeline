@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import snntorch as snn
 from leakysv import LeakySV
+from fractional_lif import FractionalLIF
 
 
 class SNNPolicy(nn.Module):
@@ -33,14 +34,23 @@ class SNNPolicy(nn.Module):
         neuron_type="leaky",
         hidden1_size=128,
         hidden2_size=128,
+        # Fractional-order LIF specific parameters
+        alpha=0.5,
+        lam=0.111,
+        history_length=256,
+        dt=1.0,
     ):
         """
         - num_steps: number of timesteps to simulate the SNN per environment step
-        - beta: membrane decay for LIF
+        - beta: membrane decay for LIF (leaky neurons only)
         - spike_grad: surrogate gradient function from snntorch.surrogate (optional)
-        - neuron_type: "leakysv" or "leaky" - type of spiking neuron to use
+        - neuron_type: "leakysv", "leaky", or "fractional" - type of spiking neuron to use
         - hidden1_size: number of neurons in first hidden layer (default: 128)
         - hidden2_size: number of neurons in second hidden layer (default: 128)
+        - alpha: fractional order for derivative (fractional neurons only, default: 0.5)
+        - lam: leakage parameter in fractional equation (fractional neurons only, default: 0.111)
+        - history_length: number of past values for GL approximation (fractional neurons only, default: 256)
+        - dt: discrete timestep for GL approximation (fractional neurons only, default: 1.0)
         """
         super().__init__()
         self.num_steps = num_steps
@@ -57,6 +67,26 @@ class SNNPolicy(nn.Module):
             self.lif1 = snn.Leaky(beta=beta, init_hidden=True, spike_grad=spike_grad)
             self.lif2 = snn.Leaky(
                 beta=beta, init_hidden=True, spike_grad=spike_grad, output=True
+            )
+        elif neuron_type == "fractional":
+            self.lif1 = FractionalLIF(
+                beta=beta,  # For compatibility, not used
+                alpha=alpha,
+                lam=lam,
+                history_length=history_length,
+                dt=dt,
+                spike_grad=spike_grad,
+                init_hidden=True,
+            )
+            self.lif2 = FractionalLIF(
+                beta=beta,  # For compatibility, not used
+                alpha=alpha,
+                lam=lam,
+                history_length=history_length,
+                dt=dt,
+                spike_grad=spike_grad,
+                init_hidden=True,
+                output=True,
             )
         else:
             raise ValueError(f"Unknown neuron type: {neuron_type}")
@@ -82,6 +112,8 @@ class SNNPolicy(nn.Module):
         # This avoids leak between separate forward passes / episodes.
         if self.neuron_type == "leakysv":
             LeakySV.reset_hidden()  # reset for LeakySV neurons (includes refractory counter)
+        elif self.neuron_type == "fractional":
+            FractionalLIF.reset_hidden()  # reset for FractionalLIF neurons (includes history buffer)
         else:
             snn.Leaky.reset_hidden()  # reset for Leaky neurons
 
