@@ -167,17 +167,27 @@ class FractionalLIF(snn.Leaky):
         # Extract past coefficients (skip g_0=1 which multiplies V[n])
         coeffs_past = coeffs[1:]
 
-        # History convolution
-        history_valid = self.hist[: self.history_length - 1]
-        history_sum = torch.einsum("k,k...->...", coeffs_past, history_valid)
+        # History convolution using simple multiply-accumulate
+        # coeffs_past shape: (history_length-1,)
+        # hist shape: (history_length, batch, features)
+        # We want: Σ coeffs_past[k] * hist[k] for k=0..history_length-2
+        history_valid = self.hist[: self.history_length - 1]  # (H-1, batch, features)
+
+        # Reshape coeffs for broadcasting: (H-1, 1, 1) -> broadcasts to (H-1, batch, features)
+        coeffs_reshaped = coeffs_past.view(-1, 1, 1)
+
+        # Element-wise multiply and sum over time dimension (much faster than einsum)
+        history_sum = (coeffs_reshaped * history_valid).sum(dim=0)  # (batch, features)
 
         # Compute new membrane potential
         numerator = input_ - C * history_sum
         denominator = C + self.lam
         mem_new = numerator / denominator
 
-        # Update history buffer: shift and insert current mem
-        self.hist = torch.cat([self.mem.unsqueeze(0), self.hist[:-1]], dim=0)
+        # Update history buffer: shift in-place (faster than cat)
+        # Roll the history buffer and insert current mem at position 0
+        self.hist = torch.roll(self.hist, shifts=1, dims=0)
+        self.hist[0] = self.mem
 
         return mem_new
 

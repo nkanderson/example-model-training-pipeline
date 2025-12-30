@@ -24,5 +24,5 @@ snn:
   # Fractional-order LIF specific parameters (used only when neuron_type: fractional)
   alpha: 0.5 # Fractional order for derivative (0 < alpha <= 1)
   lam: 0.111 # Leakage parameter (matches beta=0.9 for reasonable comparison to standard LIF)
-  history_length: 256 # Number of past values for GL approximation
+  history_length: 64 # Number of past values for GL approximation
   dt: 1.0 # Discrete timestep for GL approximation
