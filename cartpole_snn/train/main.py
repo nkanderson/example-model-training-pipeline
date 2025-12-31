@@ -246,47 +246,13 @@ if __name__ == "__main__":
     final_model_filename = str(models_dir / f"dqn_{config_name}-final.pth")
 
     #
-    # Section 2: Initialize policy and target nets, optimizer, replay memory,
-    # and create the CartPole environment
+    # Section 2: Initialize replay memory and create the CartPole environment
     #
     memory = ReplayMemory(10000)
     env = gym.make("CartPole-v1", render_mode="human" if human_render else None)
 
-    # Create network instances
-    policy_net = SNNPolicy(
-        n_observations,
-        n_actions,
-        num_steps=num_steps,
-        beta=beta,
-        spike_grad=spike_grad,
-        neuron_type=neuron_type,
-        hidden1_size=hidden1_size,
-        hidden2_size=hidden2_size,
-        alpha=alpha,
-        lam=lam,
-        history_length=history_length,
-        dt=dt,
-    ).to(device)
-    target_net = SNNPolicy(
-        n_observations,
-        n_actions,
-        num_steps=num_steps,
-        beta=beta,
-        spike_grad=spike_grad,
-        neuron_type=neuron_type,
-        hidden1_size=hidden1_size,
-        hidden2_size=hidden2_size,
-        alpha=alpha,
-        lam=lam,
-        history_length=history_length,
-        dt=dt,
-    ).to(device)
-
-    # Create optimizer
-    optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
-
     #
-    # Section 3: If needed, load networks and optimizer
+    # Section 3: Load networks and optimizer
     # If loading a pre-trained model, load it and optionally evaluate then exit.
     # Otherwise, configure target_net from policy_net.
     #
@@ -295,6 +261,46 @@ if __name__ == "__main__":
     if pretrained_file:
         # Load pre-trained model using DQNAgent.load()
         print(f"Loading pre-trained model from {pretrained_file}")
+        # Load checkpoint to get config
+        checkpoint = torch.load(pretrained_file, map_location=device)
+        loaded_config = checkpoint.get("config", {})
+        # Use loaded config for SNN architecture and fractional params
+        hidden1_size = loaded_config.get("hidden1_size", hidden1_size)
+        hidden2_size = loaded_config.get("hidden2_size", hidden2_size)
+        alpha = loaded_config.get("alpha", alpha)
+        lam = loaded_config.get("lam", lam)
+        history_length = loaded_config.get("history_length", history_length)
+        dt = loaded_config.get("dt", dt)
+        # Create policy and target nets with params from loaded model
+        policy_net = SNNPolicy(
+            n_observations,
+            n_actions,
+            num_steps=num_steps,
+            beta=beta,
+            spike_grad=spike_grad,
+            neuron_type=neuron_type,
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            alpha=alpha,
+            lam=lam,
+            history_length=history_length,
+            dt=dt,
+        ).to(device)
+        target_net = SNNPolicy(
+            n_observations,
+            n_actions,
+            num_steps=num_steps,
+            beta=beta,
+            spike_grad=spike_grad,
+            neuron_type=neuron_type,
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            alpha=alpha,
+            lam=lam,
+            history_length=history_length,
+            dt=dt,
+        ).to(device)
+        optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
         agent = DQNAgent.load(
             pretrained_file,
             policy_net,
@@ -323,6 +329,38 @@ if __name__ == "__main__":
             env.close()
             exit(0)
     else:
+        # Create network instances
+        policy_net = SNNPolicy(
+            n_observations,
+            n_actions,
+            num_steps=num_steps,
+            beta=beta,
+            spike_grad=spike_grad,
+            neuron_type=neuron_type,
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            alpha=alpha,
+            lam=lam,
+            history_length=history_length,
+            dt=dt,
+        ).to(device)
+        target_net = SNNPolicy(
+            n_observations,
+            n_actions,
+            num_steps=num_steps,
+            beta=beta,
+            spike_grad=spike_grad,
+            neuron_type=neuron_type,
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            alpha=alpha,
+            lam=lam,
+            history_length=history_length,
+            dt=dt,
+        ).to(device)
+
+        # Create optimizer
+        optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
         # Initialize target network from policy network for fresh start
         target_net.load_state_dict(policy_net.state_dict())
 

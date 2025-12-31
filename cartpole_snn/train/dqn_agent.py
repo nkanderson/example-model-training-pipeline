@@ -148,6 +148,13 @@ class DQNAgent:
                 "num_steps": self.num_steps,
                 "beta": self.beta,
                 "neuron_type": self.neuron_type,
+                # Add SNN architecture and fractional params if present
+                "hidden1_size": getattr(self.policy_net, "hidden1_size", 64),
+                "hidden2_size": getattr(self.policy_net, "hidden2_size", 64),
+                "alpha": getattr(self.policy_net, "alpha", 0.5),
+                "lam": getattr(self.policy_net, "lam", 0.111),
+                "history_length": getattr(self.policy_net, "history_length", 64),
+                "dt": getattr(self.policy_net, "dt", 1.0),
             },
         }
 
@@ -207,6 +214,13 @@ class DQNAgent:
             device=device,
             episode=checkpoint["episode"],
             avg_reward=checkpoint["avg_reward"],
+            # Pass through additional SNN/fractional params if present
+            hidden1_size=config.get("hidden1_size", 64),
+            hidden2_size=config.get("hidden2_size", 64),
+            alpha=config.get("alpha", 0.5),
+            lam=config.get("lam", 0.111),
+            history_length=config.get("history_length", 64),
+            dt=config.get("dt", 1.0),
         )
 
         return agent
