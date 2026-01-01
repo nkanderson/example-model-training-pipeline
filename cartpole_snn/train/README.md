@@ -11,13 +11,13 @@ python main.py
 # Train with live visualization
 python main.py --human-render
 
-# Load and evaluate a trained model
-python main.py --load models/dqn_config-baseline-best.pth --evaluate-only --human-render
+# Load and evaluate a trained model (uses model's saved config)
+python main.py --load models/dqn_baseline-best.pth --evaluate-only --human-render
 ```
 
 ## Configuration
 
-Training hyperparameters and network settings are defined in YAML configuration files located in the `configs/` directory.
+Training hyperparameters and network settings are defined in YAML configuration files located in the `configs/` directory. When loading a saved model, its configuration is automatically loaded from the checkpoint - no config file is needed unless overriding specific parameters is necessary (as in the case of legacy checkpoint models).
 
 ### Configuration File Structure
 
@@ -36,20 +36,44 @@ snn:
   num_steps: 30            # SNN simulation timesteps per environment step
   beta: 0.9                # LIF neuron membrane decay rate
   surrogate_gradient_slope: 25  # Slope for fast_sigmoid surrogate gradient
-  neuron_type: leaky       # Neuron type: 'leaky' or 'leakysv'
+  neuron_type: leaky       # Neuron type: 'leaky', 'leakysv', or 'fractional'
+  hidden1_size: 64         # First hidden layer size
+  hidden2_size: 16         # Second hidden layer size
+  
+  # Fractional-order LIF parameters (only used when neuron_type: fractional)
+  alpha: 0.5               # Fractional order (0 < alpha < 1)
+  lam: 0.111               # Decay rate parameter (lambda)
+  history_length: 64       # Number of timesteps for GL memory
+  dt: 1.0                  # Time step size
 ```
 
-### Available Configurations
+### Configuration Precedence
 
-- **`config-baseline.yaml`**: Original hyperparameters used for initial experiments
+When loading a model with `--load`, the configuration precedence is:
+
+1. **Checkpoint config** (highest priority) - Parameters saved in the model file
+2. **Config file** - If `--config` is specified, fills in missing parameters from checkpoint (necessary for legacy models)
+3. **Placeholder defaults** - Used when no config file and checkpoint is missing parameters
+
+This allows you to:
+- Load modern models without specifying a config file (checkpoint has everything)
+- Use a config file to provide missing parameters for older checkpoints
+- Train from scratch with a config file
+
+### Example Available Configurations
+
+- **`baseline.yaml`**: Standard leaky integrate-and-fire (LIF) neurons
+- **`baseline-flif.yaml`**: Fractional-order LIF neurons with memory effects
 
 ## Command Line Arguments
 
 ### Configuration
-- `--config`, `-c`: Path to YAML configuration file (default: `configs/config-baseline.yaml`)
+- `--config`, `-c`: Path to YAML configuration file
+  - Default: `configs/baseline.yaml` when training from scratch
+  - Default: `None` when loading a model (uses checkpoint's saved config)
+  - Can be specified when loading to override checkpoint parameters for legacy models
 
 ### Model Options
-- `--neuron-type`, `-n`: Type of spiking neuron (`leaky` or `leakysv`) - overrides config if specified
 - `--load`: Load pre-trained model from file
 - `--evaluate-only`: Only evaluate the loaded model without training
 
@@ -66,36 +90,39 @@ snn:
 python main.py
 
 # Train with custom configuration
-python main.py --config configs/config-stable.yaml
+python main.py --config configs/baseline.yaml
+
+# Train with fractional LIF neurons
+python main.py --config configs/baseline-flif.yaml
 
 # Train with live visualization (slower but useful for debugging)
 python main.py --human-render
 
 # Train without hardware acceleration (CPU only)
 python main.py --no-hw-acceleration
-
-# Train with LeakySV neurons (includes refractory period)
-python main.py --neuron-type leakysv
 ```
 
 ### Evaluation
 
 ```bash
-# Evaluate best model with visualization
-python main.py --load models/dqn_config-baseline-best.pth --evaluate-only --human-render
+# Evaluate best model with visualization (uses model's saved config)
+python main.py --load models/dqn_baseline-best.pth --evaluate-only --human-render
 
 # Evaluate final model
-python main.py --load models/dqn_config-baseline-final.pth --evaluate-only
+python main.py --load models/dqn_baseline-final.pth --evaluate-only
+
+# Evaluate quantized model
+python main.py --load models/dqn_baseline-best-quantized-QS2_5.pth --evaluate-only --human-render
 ```
 
 ### Resuming Training
 
 ```bash
-# Continue training from a saved checkpoint
-python main.py --load models/dqn_config-baseline-best.pth
+# Continue training from a saved checkpoint (uses checkpoint's config)
+python main.py --load models/dqn_baseline-best.pth
 
-# Resume with different neuron type
-python main.py --load models/dqn_config-baseline-best.pth --neuron-type leakysv
+# Resume training but change training parameters (e.g., more episodes)
+python main.py --load models/dqn_baseline-best.pth --config configs/extended-training.yaml
 ```
 
 ## Output Files
@@ -106,12 +133,118 @@ Training produces two model checkpoints in the `models/` directory:
 - **`models/dqn_<config-name>-final.pth`**: Model from the final training episode
 
 Each checkpoint contains:
-- Policy network state
-- Target network state
-- Optimizer state
-- Episode number
-- Average reward
-- Network configuration parameters
+- Policy network state (weights and biases)
+- Target network state (weights and biases)
+- Optimizer state (for resuming training)
+- Episode number (training progress)
+- Average reward (performance metric)
+- **Full configuration** (all hyperparameters and network settings)
+  - Training parameters (batch_size, gamma, learning rate, etc.)
+  - SNN parameters (num_steps, beta, neuron_type, hidden sizes)
+  - Fractional LIF parameters (if applicable: alpha, lam, history_length, dt)
+
+This self-contained format means it is possible to evaluate or resume training from any checkpoint without needing the original config file.
+
+## Weight Quantization
+
+After training, model weights may be quantized for hardware deployment or to analyze the effects of reduced precision.
+
+### Inspect Weights
+
+Analyze weight distributions and get quantization format recommendations:
+
+```bash
+python scripts/manage_weights.py inspect models/dqn_config-baseline-best.pth
+```
+
+This displays:
+- Overall weight statistics (min, max, mean, std)
+- Suggested quantization format based on weight distribution
+- Per-layer statistics
+
+### Quantize Weights
+
+Quantize weights to a specific fixed-point format and analyze quantization error (does not export or write out the quantized weights themselves, see export for weight file output):
+
+```bash
+# Quantize to QS1_6 format (8-bit signed: 1 sign + 1 int + 6 frac)
+python scripts/manage_weights.py quantize models/dqn_config-baseline-best.pth --bits 8 --frac 6 --signed
+
+# Quantize to Q3_5 format (8-bit unsigned: 3 int + 5 frac)
+python scripts/manage_weights.py quantize models/dqn_config-baseline-best.pth --bits 8 --frac 5
+
+# Show per-layer statistics
+python scripts/manage_weights.py quantize models/dqn_config-baseline-best.pth --bits 8 --frac 6 --signed --verbose
+```
+
+The quantize command reports:
+- Quantization configuration (scale factor, value range)
+- Quantization error statistics:
+  - **MSE** (Mean Squared Error): Average of squared differences `(original - quantized)²` across all weights
+  - **mean_abs_error**: Average absolute difference `|original - quantized|` - typical error magnitude per weight
+  - **max_abs_error**: Largest absolute difference for any single weight - worst-case quantization error
+- Per-parameter statistics (with `--verbose`)
+
+### Export Quantized Models
+
+#### Export for PyTorch Evaluation
+
+Export quantized weights as a PyTorch `.pth` file with dequantized float values:
+
+```bash
+python scripts/manage_weights.py export pytorch models/dqn_config-baseline-best.pth \
+    --bits 8 --frac 6 --signed \
+    --output models/dqn_config-baseline-best_quantized.pth
+```
+
+This creates a model checkpoint where weights represent the exact values that hardware will compute, but in PyTorch-compatible float format. It is then possible to evaluate performance degradation:
+
+```bash
+# Evaluate the quantized model
+python main.py --load models/dqn_config-baseline-best_quantized.pth --evaluate-only --human-render
+```
+
+#### Export for Hardware Deployment
+
+IN-PROGRESS: Export quantized weights as `.mem` files for Verilog/SystemVerilog hardware:
+
+```bash
+python scripts/manage_weights.py export hardware models/dqn_config-baseline-best.pth \
+    --bits 8 --frac 6 --signed \
+    --output weights_hw/
+```
+
+This generates:
+- `fc1_weight.mem`, `fc1_bias.mem` - First linear layer
+- `fc2_weight.mem`, `fc2_bias.mem` - Second linear layer  
+- `fc_out_weight.mem`, `fc_out_bias.mem` - Output layer
+- `metadata.json` - Quantization configuration
+
+### Complete Quantization Workflow
+
+```bash
+# 1. Train model
+python main.py --config configs/baseline.yaml
+
+# 2. Inspect weights to determine optimal format
+python scripts/manage_weights.py inspect models/dqn_baseline-best.pth
+
+# 3. Quantize and check error
+python scripts/manage_weights.py quantize models/dqn_baseline-best.pth --bits 8 --frac 6 --signed
+
+# 4. Export for PyTorch validation
+python scripts/manage_weights.py export pytorch models/dqn_baseline-best.pth \
+    --bits 8 --frac 6 --signed \
+    --output models/dqn_baseline-best_q8.pth
+
+# 5. Evaluate quantized model
+python main.py --load models/dqn_baseline-best_q8.pth --evaluate-only --human-render
+
+# 6. If performance is acceptable, export for hardware
+python scripts/manage_weights.py export hardware models/dqn_baseline-best.pth \
+    --bits 8 --frac 6 --signed \
+    --output weights_hw/
+```
 
 ## Training Visualization
 
@@ -144,16 +277,24 @@ The plot updates during training and shows final results when complete.
 
 ```
 cartpole_snn/train/
-├── README.md                 # This file
-├── main.py                   # Main training script
-├── snn_policy.py            # SNN-based policy network
-├── dqn_agent.py             # DQN agent implementation
-├── leakysv.py               # LeakySV neuron with refractory period
-├── configs/                 # Configuration files
-│   └── config-baseline.yaml
-└── models/                  # Saved model checkpoints, e.g.:
-    ├── dqn_config-baseline-best.pth
-    └── dqn_config-baseline-final.pth
+├── README.md                   # This file
+├── main.py                     # Main training script
+├── snn_policy.py               # SNN-based policy network
+├── dqn_agent.py                # DQN agent implementation
+├── leakysv.py                  # LeakySV neuron with refractory period
+├── fractional_lif.py           # Fractional-order LIF neuron (FLIF)
+├── utils.py                    # Utility functions (GL coefficients, etc.)
+├── configs/                    # Configuration files
+│   ├── baseline.yaml           # Standard LIF baseline
+│   ├── baseline-flif.yaml      # Fractional-order LIF baseline
+│   └── ...                     # Other experimental configs
+├── scripts/                    # Utility scripts
+│   ├── manage_weights.py       # Weight quantization and export tool
+│   └── weights.py              # Weight manipulation library
+└── models/                     # Saved model checkpoints
+    ├── dqn_baseline-best.pth
+    ├── dqn_baseline-final.pth
+    └── ...
 ```
 
 ## Requirements

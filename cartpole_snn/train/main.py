@@ -10,9 +10,10 @@ from snntorch import surrogate
 from snn_policy import SNNPolicy
 from dqn_agent import DQNAgent, ReplayMemory
 import matplotlib
+
 # Use non-interactive backend if no display is available (e.g., headless/tmux)
-if not os.environ.get('DISPLAY'):
-    matplotlib.use('Agg')
+if not os.environ.get("DISPLAY"):
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from itertools import count
 import random
@@ -30,6 +31,42 @@ def load_config(config_path):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
+
+
+def get_config_name(config_path=None, pretrained_file=None):
+    """
+    Determine config name for model filenames.
+
+    Args:
+        config_path: Path to config file (if provided)
+        pretrained_file: Path to pretrained model file (if loading)
+
+    Returns:
+        String to use as config name for model filenames
+
+    Raises:
+        ValueError: If both config_path and pretrained_file are None
+    """
+    if config_path is not None:
+        # Use config file basename
+        return Path(config_path).stem
+    elif pretrained_file is not None:
+        # Derive from loaded model filename
+        import re
+
+        loaded_name = Path(pretrained_file).stem
+        # Remove common suffixes like -best, -final, -quantized, etc
+        for suffix in ["-best", "-final", "-quantized"]:
+            if loaded_name.endswith(suffix):
+                loaded_name = loaded_name[: -len(suffix)]
+        # Also remove quantization format suffixes like -QS2_5
+        loaded_name = re.sub(r"-Q[A-Z]?\d+_\d+$", "", loaded_name)
+        return loaded_name
+    else:
+        # Both parameters are None - this is a programming error
+        raise ValueError(
+            "get_config_name() requires either config_path or pretrained_file to be provided"
+        )
 
 
 # TODO: Consider moving this to a method of the DQNAgent class
@@ -107,7 +144,7 @@ def plot_durations(episode_durations, show_result=False):
 # for parity in performance between full-precision and quantized models.
 if __name__ == "__main__":
     #
-    # Section 0: Parse command line arguments
+    # Section 0: Parse command line arguments and load configuration
     #
     parser = argparse.ArgumentParser(
         description="Train or evaluate an SNN-based DQN agent on CartPole"
@@ -118,19 +155,8 @@ if __name__ == "__main__":
         "--config",
         "-c",
         type=str,
-        default="configs/config-baseline.yaml",
-        help="Path to YAML configuration file (default: configs/config-baseline.yaml)",
-    )
-
-    # Model configuration
-    # Note: --neuron-type on the command line overrides config file value
-    parser.add_argument(
-        "--neuron-type",
-        "-n",
-        type=str,
         default=None,
-        choices=["leaky", "leakysv", "fractional"],
-        help="Type of spiking neuron to use (overrides config if specified)",
+        help="Path to YAML configuration file (default: configs/baseline.yaml if not loading a model, otherwise use model's saved config)",
     )
 
     # Training/loading options
@@ -165,39 +191,71 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Load configuration file
-    # TODO: In the future, allow command-line arguments to override config values
-    config = load_config(args.config)
-    config_name = Path(
-        args.config
-    ).stem  # Extract name for model filenames (e.g., "config-baseline")
+    # Determine config file to use
+    # If loading a model and no config specified, we'll use the model's saved config
+    # If not loading a model and no config specified, use default baseline config
+    if args.config is None:
+        if args.load is None:
+            # Training from scratch, need a config file
+            args.config = "configs/baseline.yaml"
+            print("No config specified, using default: configs/baseline.yaml")
+        else:
+            # Loading a model, will use its saved config (no config file needed)
+            print("No config specified, will use config from loaded model")
 
-    # Extract hyperparameters from config
-    batch_size = config["training"]["batch_size"]
-    gamma = config["training"]["gamma"]
-    eps_start = config["training"]["eps_start"]
-    eps_end = config["training"]["eps_end"]
-    eps_decay = config["training"]["eps_decay"]
-    tau = config["training"]["tau"]
-    lr = config["training"]["lr"]
-    num_episodes = config["training"]["num_episodes"]
+    # Load configuration file (if we have one)
+    config = None
+    if args.config is not None:
+        config = load_config(args.config)
 
-    num_steps = config["snn"]["num_steps"]
-    beta = config["snn"]["beta"]
-    surrogate_gradient_slope = config["snn"]["surrogate_gradient_slope"]
-    neuron_type = config["snn"]["neuron_type"]
-    hidden1_size = config["snn"]["hidden1_size"]
-    hidden2_size = config["snn"]["hidden2_size"]
+    # Determine config name for model filenames (works with or without config file)
+    config_name = get_config_name(config_path=args.config, pretrained_file=args.load)
 
-    # Fractional-order LIF parameters (optional, used only if neuron_type == "fractional")
-    alpha = config["snn"].get("alpha", 0.5)
-    lam = config["snn"].get("lam", 0.111)
-    history_length = config["snn"].get("history_length", 256)
-    dt = config["snn"].get("dt", 1.0)
+    # Extract hyperparameters from config (with defaults for when loading from model)
+    if config is not None:
+        batch_size = config["training"]["batch_size"]
+        gamma = config["training"]["gamma"]
+        eps_start = config["training"]["eps_start"]
+        eps_end = config["training"]["eps_end"]
+        eps_decay = config["training"]["eps_decay"]
+        tau = config["training"]["tau"]
+        lr = config["training"]["lr"]
+        num_episodes = config["training"]["num_episodes"]
 
-    # Command-line args override config (for neuron_type)
-    if args.neuron_type is not None:
-        neuron_type = args.neuron_type
+        num_steps = config["snn"]["num_steps"]
+        beta = config["snn"]["beta"]
+        surrogate_gradient_slope = config["snn"]["surrogate_gradient_slope"]
+        neuron_type = config["snn"]["neuron_type"]
+        hidden1_size = config["snn"]["hidden1_size"]
+        hidden2_size = config["snn"]["hidden2_size"]
+
+        # Fractional-order LIF parameters (optional, used only if neuron_type == "fractional")
+        alpha = config["snn"].get("alpha", 0.5)
+        lam = config["snn"].get("lam", 0.111)
+        history_length = config["snn"].get("history_length", 256)
+        dt = config["snn"].get("dt", 1.0)
+    else:
+        # No config file - will load everything from model checkpoint
+        # Set placeholder defaults (will be overridden by checkpoint values)
+        batch_size = 128
+        gamma = 0.99
+        eps_start = 0.9
+        eps_end = 0.01
+        eps_decay = 2500
+        tau = 0.005
+        lr = 0.0003
+        num_episodes = 600
+
+        num_steps = 30
+        beta = 0.9
+        surrogate_gradient_slope = 25
+        neuron_type = "leaky"
+        hidden1_size = 64
+        hidden2_size = 16
+        alpha = 0.5
+        lam = 0.111
+        history_length = 64
+        dt = 1.0
 
     # Apply other parsed arguments
     pretrained_file = args.load
@@ -225,11 +283,6 @@ if __name__ == "__main__":
 
     print(f"Using device: {device}")
     print(f"Using config: {config_name}")
-    print(f"Using neuron type: {neuron_type}")
-    if neuron_type == "fractional":
-        print(f"  Fractional parameters: alpha={alpha}, lam={lam}, history_length={history_length}, dt={dt}")
-    mode = "Running" if evaluate_only else "Training"
-    print(f"{mode} for {num_episodes} episodes")
 
     episode_durations = []
     steps_done = 0
@@ -261,46 +314,75 @@ if __name__ == "__main__":
     if pretrained_file:
         # Load pre-trained model using DQNAgent.load()
         print(f"Loading pre-trained model from {pretrained_file}")
-        # Load checkpoint to get config
-        checkpoint = torch.load(pretrained_file, map_location=device)
-        loaded_config = checkpoint.get("config", {})
-        # Use loaded config for SNN architecture and fractional params
-        hidden1_size = loaded_config.get("hidden1_size", hidden1_size)
-        hidden2_size = loaded_config.get("hidden2_size", hidden2_size)
-        alpha = loaded_config.get("alpha", alpha)
-        lam = loaded_config.get("lam", lam)
-        history_length = loaded_config.get("history_length", history_length)
-        dt = loaded_config.get("dt", dt)
-        # Create policy and target nets with params from loaded model
+
+        # Load checkpoint to inspect saved config
+        checkpoint = torch.load(
+            pretrained_file, map_location=device, weights_only=False
+        )
+        checkpoint_config = checkpoint.get("config", {})
+
+        # Determine values for network creation
+        # Precedence: checkpoint config > config file > placeholder defaults
+        # The following gets the values from the checkpoint if they exist,
+        # otherwise fall back to the defaults defined earlier. If config is not None,
+        # the defaults will be from the config file.
+        net_hidden1_size = checkpoint_config.get("hidden1_size", hidden1_size)
+        net_hidden2_size = checkpoint_config.get("hidden2_size", hidden2_size)
+        net_alpha = checkpoint_config.get("alpha", alpha)
+        net_lam = checkpoint_config.get("lam", lam)
+        net_history_length = checkpoint_config.get("history_length", history_length)
+        net_dt = checkpoint_config.get("dt", dt)
+        net_num_steps = checkpoint_config.get("num_steps", num_steps)
+        net_beta = checkpoint_config.get("beta", beta)
+        net_neuron_type = checkpoint_config.get("neuron_type", neuron_type)
+
+        # Set config_overrides for loading the agent. This is only necessary for
+        # older models which did not have all parameters saved in the checkpoint.
+        # These have the precedence: checkpoint > config file > placeholder
+        config_overrides = {
+            "hidden1_size": net_hidden1_size,
+            "hidden2_size": net_hidden2_size,
+            "alpha": net_alpha,
+            "lam": net_lam,
+            "history_length": net_history_length,
+            "dt": net_dt,
+            "num_steps": net_num_steps,
+            "beta": net_beta,
+            "neuron_type": net_neuron_type,
+        }
+
+        # Create policy and target nets with precedence: checkpoint > config file > placeholder
         policy_net = SNNPolicy(
             n_observations,
             n_actions,
-            num_steps=num_steps,
-            beta=beta,
+            num_steps=net_num_steps,
+            beta=net_beta,
             spike_grad=spike_grad,
-            neuron_type=neuron_type,
-            hidden1_size=hidden1_size,
-            hidden2_size=hidden2_size,
-            alpha=alpha,
-            lam=lam,
-            history_length=history_length,
-            dt=dt,
+            neuron_type=net_neuron_type,
+            hidden1_size=net_hidden1_size,
+            hidden2_size=net_hidden2_size,
+            alpha=net_alpha,
+            lam=net_lam,
+            history_length=net_history_length,
+            dt=net_dt,
         ).to(device)
         target_net = SNNPolicy(
             n_observations,
             n_actions,
-            num_steps=num_steps,
-            beta=beta,
+            num_steps=net_num_steps,
+            beta=net_beta,
             spike_grad=spike_grad,
-            neuron_type=neuron_type,
-            hidden1_size=hidden1_size,
-            hidden2_size=hidden2_size,
-            alpha=alpha,
-            lam=lam,
-            history_length=history_length,
-            dt=dt,
+            neuron_type=net_neuron_type,
+            hidden1_size=net_hidden1_size,
+            hidden2_size=net_hidden2_size,
+            alpha=net_alpha,
+            lam=net_lam,
+            history_length=net_history_length,
+            dt=net_dt,
         ).to(device)
         optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
+
+        # Load agent with optional config overrides (hybrid approach)
         agent = DQNAgent.load(
             pretrained_file,
             policy_net,
@@ -308,6 +390,7 @@ if __name__ == "__main__":
             optimizer,
             memory,
             device,
+            config_overrides=config_overrides if config_overrides else None,
         )
 
         # Extract components from agent
@@ -317,11 +400,19 @@ if __name__ == "__main__":
         start_episode = agent.episode
         prev_avg = agent.avg_reward
 
-        print(f"Resuming from episode {start_episode} (prev avg: {prev_avg:.2f})")
-
         # If evaluate-only mode, run evaluation and exit
         if evaluate_only:
-            print("Running evaluation...")
+            print(
+                f"Loaded mode for evaluation: neuron_type={agent.neuron_type}, "
+                f"hidden_sizes=({agent.hidden1_size}, {agent.hidden2_size})"
+            )
+            if agent.neuron_type == "fractional":
+                print(
+                    f"  Fractional parameters: alpha={agent.alpha}, lam={agent.lam}, "
+                    f"history_length={agent.history_length}, dt={agent.dt}"
+                )
+            print(f"Resuming from episode {start_episode} (prev avg: {prev_avg:.2f})")
+            print(f"Running evaluation for {num_episodes} episodes")
             episode_rewards, avg_reward = agent.evaluate(
                 env, num_episodes=10, render=True
             )
@@ -378,7 +469,24 @@ if __name__ == "__main__":
             device=device,
             episode=0,
             avg_reward=0.0,
+            # SNN architecture parameters
+            hidden1_size=hidden1_size,
+            hidden2_size=hidden2_size,
+            # Fractional-order LIF parameters
+            alpha=alpha,
+            lam=lam,
+            history_length=history_length,
+            dt=dt,
         )
+
+    # Print configuration info after agent is created
+    print(f"Using neuron type: {agent.neuron_type}")
+    if agent.neuron_type == "fractional":
+        print(
+            f"  Fractional parameters: alpha={agent.alpha}, lam={agent.lam}, "
+            f"history_length={agent.history_length}, dt={agent.dt}"
+        )
+    print(f"Training for {num_episodes} episodes")
 
     #
     # Section 4: Main training loop
@@ -446,7 +554,7 @@ if __name__ == "__main__":
     #
     # Section 5: Save final model
     #
-    final_avg = sum(episode_durations[-min(len(episode_durations), 100):]) / min(
+    final_avg = sum(episode_durations[-min(len(episode_durations), 100) :]) / min(
         len(episode_durations), 100
     )
     # Update agent's episode and avg_reward before saving
@@ -471,5 +579,5 @@ if __name__ == "__main__":
     plt.savefig(plot_filename)
     print(f"Training plot saved to: {plot_filename}")
 
-    if os.environ.get('DISPLAY') or human_render:
+    if os.environ.get("DISPLAY") or human_render:
         plt.show()

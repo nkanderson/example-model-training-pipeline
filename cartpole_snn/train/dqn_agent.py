@@ -49,6 +49,14 @@ class DQNAgent:
         device: torch.device,
         episode: int = 0,
         avg_reward: float = 0.0,
+        # Optional SNN architecture parameters, with defaults
+        hidden1_size: int = 64,
+        hidden2_size: int = 64,
+        # Optional fractional-order LIF parameters, with defaults
+        alpha: float = 0.5,
+        lam: float = 0.111,
+        history_length: int = 64,
+        dt: float = 1.0,
     ):
         """
         Initialize the agent.
@@ -62,18 +70,34 @@ class DQNAgent:
             n_actions: Number of possible actions
             num_steps: Number of timesteps for SNN simulation
             beta: LIF neuron decay parameter
-            neuron_type: Type of spiking neuron ('leaky', 'leakysv', etc.)
+            neuron_type: Type of spiking neuron ('leaky', 'leakysv', 'fractional')
             device: Torch device (CPU/CUDA/MPS)
             episode: Current episode number (default: 0)
             avg_reward: Running average reward (default: 0.0)
+            hidden1_size: Size of first hidden layer (default: 64)
+            hidden2_size: Size of second hidden layer (default: 64)
+            alpha: Fractional order for FLIF neurons (default: 0.5)
+            lam: Lambda parameter for FLIF neurons (default: 0.111)
+            history_length: History buffer length for FLIF neurons (default: 64)
+            dt: Time step for FLIF neurons (default: 1.0)
         """
-        # Network architecture hyperparameters
+        # Training hyperparameters
         self.n_observations = n_observations
         self.n_actions = n_actions
+        self.device = device
+
+        # SNN and network architecture parameters
         self.num_steps = num_steps
         self.beta = beta
         self.neuron_type = neuron_type
-        self.device = device
+        self.hidden1_size = hidden1_size
+        self.hidden2_size = hidden2_size
+
+        # Fractional-order LIF parameters
+        self.alpha = alpha
+        self.lam = lam
+        self.history_length = history_length
+        self.dt = dt
 
         # Model components (pre-initialized instances)
         self.policy_net = policy_net
@@ -145,16 +169,17 @@ class DQNAgent:
             "config": {
                 "n_observations": self.n_observations,
                 "n_actions": self.n_actions,
+                # SNN architecture parameters
                 "num_steps": self.num_steps,
                 "beta": self.beta,
                 "neuron_type": self.neuron_type,
-                # Add SNN architecture and fractional params if present
-                "hidden1_size": getattr(self.policy_net, "hidden1_size", 64),
-                "hidden2_size": getattr(self.policy_net, "hidden2_size", 64),
-                "alpha": getattr(self.policy_net, "alpha", 0.5),
-                "lam": getattr(self.policy_net, "lam", 0.111),
-                "history_length": getattr(self.policy_net, "history_length", 64),
-                "dt": getattr(self.policy_net, "dt", 1.0),
+                "hidden1_size": self.hidden1_size,
+                "hidden2_size": self.hidden2_size,
+                # Fractional-order LIF parameters
+                "alpha": self.alpha,
+                "lam": self.lam,
+                "history_length": self.history_length,
+                "dt": self.dt,
             },
         }
 
@@ -171,12 +196,17 @@ class DQNAgent:
         optimizer: torch.optim.Optimizer,
         memory: ReplayMemory,
         device: torch.device,
+        # Optional config overrides (for hybrid config loading approach)
+        config_overrides: Optional[dict] = None,
     ):
         """
-        Load a model checkpoint and return an DQNAgent instance.
+        Load a model checkpoint and return a DQNAgent instance.
 
         The provided policy_net, target_net, optimizer, and memory instances
         will have their states updated from the checkpoint.
+
+        Hybrid approach: Checkpoint parameters are used by default, but can be
+        overridden by config_overrides (with warnings printed).
 
         Args:
             filename: Path to checkpoint file
@@ -185,6 +215,8 @@ class DQNAgent:
             optimizer: Optimizer instance (state will be loaded)
             memory: Replay memory instance (not loaded from checkpoint)
             device: Torch device
+            config_overrides: Optional dict of parameters to override from checkpoint
+                            (useful when loading with a different config file)
 
         Returns:
             DQNAgent instance with loaded state
@@ -199,8 +231,19 @@ class DQNAgent:
         if "optimizer_state_dict" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-        # Create agent with loaded config and state
-        config = checkpoint["config"]
+        # Start with checkpoint config (source of truth)
+        config = checkpoint["config"].copy()
+
+        # Apply overrides if provided (hybrid approach)
+        if config_overrides:
+            for key, new_value in config_overrides.items():
+                if key in config and config[key] != new_value:
+                    print(
+                        f"WARNING: Overriding checkpoint parameter '{key}': {config[key]} -> {new_value}"
+                    )
+                config[key] = new_value
+
+        # Create agent with merged config
         agent = cls(
             policy_net=policy_net,
             target_net=target_net,
@@ -214,7 +257,7 @@ class DQNAgent:
             device=device,
             episode=checkpoint["episode"],
             avg_reward=checkpoint["avg_reward"],
-            # Pass through additional SNN/fractional params if present
+            # SNN architecture and fractional params (with defaults for old checkpoints)
             hidden1_size=config.get("hidden1_size", 64),
             hidden2_size=config.get("hidden2_size", 64),
             alpha=config.get("alpha", 0.5),
