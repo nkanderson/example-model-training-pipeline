@@ -31,98 +31,130 @@ def get_gl_coefficients(alpha: float, history_length: int) -> list[float]:
     return coeffs.tolist()
 
 
-def get_bitshift_sequence(history_length: int) -> list[float]:
+def get_bitshift_amounts(history_length: int) -> list[int]:
     """
-    Generate sequence of values by repeatedly right-shifting (dividing by 2).
+    Generate sequence of bit-shift amounts (exponents).
 
-    This produces the sequence: [1, 0.5, 0.25, 0.125, 0.0625, ...]
-    which corresponds to [2^0, 2^-1, 2^-2, 2^-3, 2^-4, ...]
+    This produces the sequence: [0, 1, 2, 3, 4, ...]
+    which represents right shifts by k bits for k=0..history_length-1.
 
-    In hardware, these can be computed efficiently with right bit shifts.
+    In hardware, value >> k is equivalent to dividing by 2^k.
 
     Args:
-        history_length: Number of values to generate
+        history_length: Number of shift amounts to generate
 
     Returns:
-        List of bit-shift values [1, 1>>1, 1>>2, 1>>3, ...]
+        List of shift amounts [0, 1, 2, 3, ...]
     """
-    values = []
-    for k in range(history_length):
-        # Each right shift by k bits is equivalent to dividing by 2^k
-        values.append(1.0 / (2**k))
-    return values
+    return list(range(history_length))
 
 
-def get_slow_decay_bitshift_sequence(history_length: int) -> list[float]:
+def get_slow_decay_bitshift_amounts(history_length: int) -> list[int]:
     """
-    Generate slow-decay bit-shift sequence with special case for first coefficient.
+    Generate slow-decay bit-shift amounts with special case for first coefficient.
 
-    This produces: [1, 0.5, 0.5, 0.25, 0.25, 0.125, 0.125, ...]
-    which corresponds to: [2^0, 2^-1, 2^-1, 2^-2, 2^-2, 2^-3, 2^-3, ...]
+    This produces: [0, 1, 1, 2, 2, 3, 3, ...]
 
-    The first coefficient (2^0) does not repeat. Starting from the second position,
-    each power of 2 appears twice before shifting to the next power.
-
-    The slower decay may better approximate GL coefficients for certain alpha values.
+    The first coefficient (shift 0) does not repeat. Starting from the second position,
+    each shift amount appears twice before incrementing.
 
     Args:
-        history_length: Number of values to generate
+        history_length: Number of shift amounts to generate
 
     Returns:
-        List of slow-decay bit-shift values where powers of 2 repeat (except first)
+        List of shift amounts where amounts repeat (except first)
     """
-    values = []
+    shift_amounts = []
     for k in range(history_length):
         if k == 0:
-            # First coefficient: 2^0 = 1.0, no repeat
+            # First coefficient: shift by 0
             shift_amount = 0
         else:
             # For k >= 1: shift by (k+1)//2, so k=1,2 -> shift 1; k=3,4 -> shift 2, etc.
             shift_amount = (k + 1) // 2
-        values.append(1.0 / (2**shift_amount))
-    return values
+        shift_amounts.append(shift_amount)
+    return shift_amounts
+
+
+def get_custom_bitshift_amounts(history_length: int, decay_rate: int = 3) -> list[int]:
+    """
+    Generate custom bit-shift amounts with specific repetition pattern.
+
+    Pattern:
+    - shift 0 once (k=0)
+    - shift 1 once (k=1)
+    - skip shift 2
+    - shift 3 once (k=2)
+    - shift 4 once (k=3)
+    - shift 5 decay_rate times (e.g. k=4,5,6 for decay_rate = 3)
+    - shift 6 decay_rate times (e.g. k=7,8,9 for decay_rate = 3)
+    - shift 7 decay_rate times (e.g. k=10,11,12 for decay_rate = 3)
+    - and so on...
+
+    This produces shift amounts: [0, 1, 3, 4, 5, 5, 5, 6, 6, 6, ...]
+
+    Args:
+        history_length: Number of shift amounts to generate
+        decay_rate: Number of times to repeat each shift >= 5
+
+    Returns:
+        List of custom bit-shift amounts following the specified pattern
+    """
+    shift_sequence = [0, 1, 3, 4]  # Initial shifts: 2^0, 2^-1, 2^-3, 2^-4
+
+    # Build the full sequence by adding shifts >= 5 decay_rate times each
+    shift = 5
+    while len(shift_sequence) < history_length:
+        shift_sequence.extend([shift] * decay_rate)
+        shift += 1
+
+    return shift_sequence[:history_length]
+
+
+def bitshift_amounts_to_sequence(shift_amounts: list[int]) -> list[float]:
+    """
+    Convert bit-shift amounts to coefficient values.
+
+    Takes a list of shift amounts (integers) and converts them to the actual
+    coefficient values by computing 1.0 / (2**shift) for each shift amount.
+
+    Args:
+        shift_amounts: List of integer shift amounts
+
+    Returns:
+        List of coefficient values computed from shift amounts
+
+    Example:
+        >>> bitshift_amounts_to_sequence([0, 1, 2, 3])
+        [1.0, 0.5, 0.25, 0.125]
+    """
+    return [1.0 / (2**shift) for shift in shift_amounts]
+
+
+# Legacy functions kept for backward compatibility - use bitshift_amounts_to_sequence instead
+def get_bitshift_sequence(history_length: int) -> list[float]:
+    """Generate sequence using get_bitshift_amounts. See bitshift_amounts_to_sequence."""
+    return bitshift_amounts_to_sequence(get_bitshift_amounts(history_length))
+
+
+def get_slow_decay_bitshift_sequence(history_length: int) -> list[float]:
+    """Generate sequence using get_slow_decay_bitshift_amounts. See bitshift_amounts_to_sequence."""
+    return bitshift_amounts_to_sequence(get_slow_decay_bitshift_amounts(history_length))
 
 
 def get_custom_bitshift_sequence(
     history_length: int, decay_rate: int = 3
 ) -> list[float]:
     """
-    Generate custom bit-shift sequence with specific repetition pattern.
-
-    Pattern:
-    - 2^0 once (k=0)
-    - 2^-1 once (k=1)
-    - skip 2^-2
-    - 2^-3 once (k=2)
-    - 2^-4 once (k=3)
-    - 2^-5 decay_rate times (e.g. k=4,5,6 for decay_rate = 3)
-    - 2^-6 decay_rate times (e.g. k=7,8,9 for decay_rate = 3)
-    - 2^-7 decay_rate times (e.g. k=10,11,12 for decay _rate = 3)
-    - and so on...
-
-    This produces: [1.0, 0.5, 0.125, 0.0625, 0.03125, 0.03125, 0.03125, ...]
+    Generate sequence using get_custom_bitshift_amounts. See bitshift_amounts_to_sequence.
 
     Args:
         history_length: Number of values to generate
-
-    Returns:
-        List of custom bit-shift values following the specified pattern
+        decay_rate: Number of times to repeat each value >= 2^-5
     """
-    values = []
-    shift_sequence = [0, 1, 3, 4]  # Initial shifts: 2^0, 2^-1, 2^-3, 2^-4
-
-    # Build the full sequence by adding shifts >= 5 three times each
-    shift = 5
-    while len(shift_sequence) < history_length:
-        shift_sequence.extend([shift] * decay_rate)
-        shift += 1
-
-    # Convert shifts to actual values
-    for k in range(history_length):
-        shift_amount = shift_sequence[k]
-        values.append(1.0 / (2**shift_amount))
-
-    return values
+    return bitshift_amounts_to_sequence(
+        get_custom_bitshift_amounts(history_length, decay_rate)
+    )
 
 
 # TODO: Add plot showing divergence between GL coefficients and bit-shift values
