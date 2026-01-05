@@ -44,7 +44,7 @@ def float_to_fixed(value: float) -> int:
 async def reset_dut(dut):
     """Apply reset sequence to the DUT and wait for it to stabilize."""
     dut.reset.value = 1
-    dut.enable.value = 0
+    dut.start.value = 0
     dut.current.value = 0
     await ClockCycles(dut.clk, 5)
     dut.reset.value = 0
@@ -69,13 +69,14 @@ async def test_lif_reset(dut):
 
     # Apply reset
     dut.reset.value = 1
-    dut.enable.value = 0
+    dut.start.value = 0
     dut.current.value = 0
 
     await ClockCycles(dut.clk, 5)
 
     # Check reset state
-    assert dut.spike.value == 0, "spike should be 0 after reset"
+    assert dut.spike_out.value == 0, "spike_out should be 0 after reset"
+    assert dut.done.value == 0, "done should be 0 after reset"
 
     dut._log.info("Reset test passed")
 
@@ -90,18 +91,26 @@ async def test_lif_no_spike_below_threshold(dut):
 
     await reset_dut(dut)
 
-    # Apply small input (0.1) for several cycles
+    # Apply small input (0.1) - membrane should accumulate but not spike
+    # With beta=0.9, membrane = 0.1 + 0.9*0.1 + 0.9^2*0.1 + ... < 1.0
     small_input = float_to_fixed(0.1)
     dut.current.value = small_input
-    dut.enable.value = 1
+    dut.start.value = 1
 
-    # Run for 5 cycles - membrane should accumulate but not spike
-    # With beta=0.9, membrane = 0.1 + 0.9*0.1 + 0.9^2*0.1 + ... < 1.0
-    for i in range(5):
+    await RisingEdge(dut.clk)
+    dut.start.value = 0  # Deassert after one cycle
+
+    # Check all 30 timesteps - should never spike
+    for i in range(30):
         await RisingEdge(dut.clk)
-        spike = int(dut.spike.value)
-        dut._log.info(f"Cycle {i+1}: spike={spike}")
-        assert spike == 0, f"Should not spike on cycle {i+1} with small input"
+        spike = int(dut.spike_out.value)
+        timestep = int(dut.timestep.value)
+        dut._log.info(f"Timestep {timestep}: spike={spike}")
+        assert spike == 0, f"Should not spike on timestep {timestep} with small input"
+
+    # Wait one more cycle for done signal to be asserted
+    await RisingEdge(dut.clk)
+    assert dut.done.value == 1, "Done should be asserted after 30 timesteps"
 
     dut._log.info("No spike below threshold test passed")
 
@@ -116,17 +125,20 @@ async def test_lif_spike_above_threshold(dut):
 
     await reset_dut(dut)
 
-    # Apply large input (1.5) - should spike immediately
+    # Apply large input (1.5) - should spike on first timestep
     large_input = float_to_fixed(1.5)
     dut.current.value = large_input
-    dut.enable.value = 1
+    dut.start.value = 1
 
     await RisingEdge(dut.clk)
-    await RisingEdge(dut.clk)  # Need one more cycle to see spike output
+    dut.start.value = 0
 
-    spike = int(dut.spike.value)
-    dut._log.info(f"Spike with large input (1.5): {spike}")
-    assert spike == 1, "Should spike when input exceeds threshold"
+    # First timestep should produce a spike
+    await RisingEdge(dut.clk)
+    spike = int(dut.spike_out.value)
+    timestep = int(dut.timestep.value)
+    dut._log.info(f"Timestep {timestep}: spike={spike}")
+    assert spike == 1, "Should spike on first timestep when input exceeds threshold"
 
     dut._log.info("Spike above threshold test passed")
 
@@ -146,14 +158,18 @@ async def test_lif_membrane_accumulation(dut):
     # Converges to 0.3/(1-0.9) = 3.0, so should spike
     moderate_input = float_to_fixed(0.3)
     dut.current.value = moderate_input
-    dut.enable.value = 1
+    dut.start.value = 1
+
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
 
     spike_detected = False
-    for i in range(20):
+    for i in range(30):
         await RisingEdge(dut.clk)
-        spike = int(dut.spike.value)
+        spike = int(dut.spike_out.value)
+        timestep = int(dut.timestep.value)
         if spike == 1:
-            dut._log.info(f"Spike detected on cycle {i+1}")
+            dut._log.info(f"Spike detected on timestep {timestep}")
             spike_detected = True
             break
 
@@ -163,7 +179,7 @@ async def test_lif_membrane_accumulation(dut):
 
 @cocotb.test()
 async def test_lif_consecutive_spiking(dut):
-    """Test that neuron can spike on consecutive cycles with high sustained input."""
+    """Test that neuron can spike on consecutive timesteps with high sustained input."""
 
     # Start clock
     clock = Clock(dut.clk, 10, units="ns")
@@ -174,22 +190,24 @@ async def test_lif_consecutive_spiking(dut):
     # Apply input that will cause spike (1.2)
     input_val = float_to_fixed(1.2)
     dut.current.value = input_val
-    dut.enable.value = 1
+    dut.start.value = 1
 
-    # Wait for spike
     await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    # Timestep 0: membrane = 1.2, should spike
     await RisingEdge(dut.clk)
+    first_spike = int(dut.spike_out.value)
+    first_timestep = int(dut.timestep.value)
+    dut._log.info(f"Timestep {first_timestep} spike: {first_spike}")
+    assert first_spike == 1, "Should spike on first timestep with input 1.2"
 
-    first_spike = int(dut.spike.value)
-    dut._log.info(f"First spike: {first_spike}")
-    assert first_spike == 1, "Should spike with input 1.2"
-
-    # Continue with same input - reset-by-subtraction should reduce membrane
-    # After spike: membrane = beta * (1.2) + 1.2 - 1.0 = 1.08 + 1.2 - 1.0 = 1.28
+    # Timestep 1: membrane = beta * (1.2 - 1.0) + 1.2 = 0.9*0.2 + 1.2 = 1.38
     # Should spike again
     await RisingEdge(dut.clk)
-    second_spike = int(dut.spike.value)
-    dut._log.info(f"Second spike: {second_spike}")
+    second_spike = int(dut.spike_out.value)
+    second_timestep = int(dut.timestep.value)
+    dut._log.info(f"Timestep {second_timestep} spike: {second_spike}")
 
     # With continuous 1.2 input, neuron should keep spiking
     assert second_spike == 1, "Should spike again with sustained high input"
@@ -202,9 +220,9 @@ async def test_lif_reset_by_subtraction(dut):
     """Test that reset-by-subtraction prevents immediate re-spike.
 
     With input=0.55 and beta=0.9:
-    - Cycle 1: membrane = 0.55 (no spike)
-    - Cycle 2: membrane = 0.9*0.55 + 0.55 = 1.045 (spike)
-    - Cycle 3: membrane = 0.9*(1.045 - 1.0) + 0.55 = 0.59 (no spike due to reset)
+    - Timestep 0: membrane = 0.55 (no spike)
+    - Timestep 1: membrane = 0.9*0.55 + 0.55 = 1.045 (spike)
+    - Timestep 2: membrane = 0.9*(1.045 - 1.0) + 0.55 = 0.59 (no spike due to reset)
     This demonstrates that reset-by-subtraction reduces membrane by threshold.
     """
 
@@ -217,34 +235,45 @@ async def test_lif_reset_by_subtraction(dut):
     # Apply input that will spike after accumulation but not immediately re-spike
     input_val = float_to_fixed(0.55)
     dut.current.value = input_val
-    dut.enable.value = 1
+    dut.start.value = 1
 
-    # Cycle 1: membrane = 0.55, no spike
     await RisingEdge(dut.clk)
-    await RisingEdge(dut.clk)
-    spike1 = int(dut.spike.value)
-    dut._log.info(f"Cycle 1 spike: {spike1}")
-    assert spike1 == 0, "Should not spike on cycle 1 (membrane = 0.55)"
+    dut.start.value = 0
 
-    # Cycle 2: membrane = 0.9*0.55 + 0.55 = 1.045, spike
+    # Timestep 0: membrane = 0.55, no spike
     await RisingEdge(dut.clk)
-    spike2 = int(dut.spike.value)
-    dut._log.info(f"Cycle 2 spike: {spike2}")
-    assert spike2 == 1, "Should spike on cycle 2 (membrane = 1.045)"
+    spike1 = int(dut.spike_out.value)
+    timestep1 = int(dut.timestep.value)
+    mem1 = int(dut.membrane_out.value)
+    mem1_float = mem1 / 8192.0 if mem1 < (1 << 23) else (mem1 - (1 << 24)) / 8192.0
+    dut._log.info(f"Timestep {timestep1} spike: {spike1}, membrane: {mem1_float:.6f}")
+    assert spike1 == 0, "Should not spike on timestep 0 (membrane = 0.55)"
 
-    # Cycle 3: membrane = 0.9*(1.045 - 1.0) + 0.55 = 0.59, no spike
+    # Timestep 1: membrane = 0.9*0.55 + 0.55 = 1.045, spike
+    await RisingEdge(dut.clk)
+    spike2 = int(dut.spike_out.value)
+    timestep2 = int(dut.timestep.value)
+    mem2 = int(dut.membrane_out.value)
+    mem2_float = mem2 / 8192.0 if mem2 < (1 << 23) else (mem2 - (1 << 24)) / 8192.0
+    dut._log.info(f"Timestep {timestep2} spike: {spike2}, membrane: {mem2_float:.6f}")
+    assert spike2 == 1, "Should spike on timestep 1 (membrane = 1.045)"
+
+    # Timestep 2: membrane = 0.9*(1.045 - 1.0) + 0.55 = 0.59, no spike
     # This is the key assertion - reset-by-subtraction prevents immediate re-spike
     await RisingEdge(dut.clk)
-    spike3 = int(dut.spike.value)
-    dut._log.info(f"Cycle 3 spike: {spike3}")
-    assert spike3 == 0, "Should NOT spike on cycle 3 due to reset-by-subtraction"
+    spike3 = int(dut.spike_out.value)
+    timestep3 = int(dut.timestep.value)
+    mem3 = int(dut.membrane_out.value)
+    mem3_float = mem3 / 8192.0 if mem3 < (1 << 23) else (mem3 - (1 << 24)) / 8192.0
+    dut._log.info(f"Timestep {timestep3} spike: {spike3}, membrane: {mem3_float:.6f}")
+    assert spike3 == 0, f"Should NOT spike on timestep 2 due to reset-by-subtraction (membrane={mem3_float:.6f})"
 
     dut._log.info("Reset by subtraction test passed")
 
 
 @cocotb.test()
-async def test_lif_enable_hold_state(dut):
-    """Test that state is held when enable is low."""
+async def test_lif_multiple_starts(dut):
+    """Test that module can be started multiple times."""
 
     # Start clock
     clock = Clock(dut.clk, 10, units="ns")
@@ -252,22 +281,33 @@ async def test_lif_enable_hold_state(dut):
 
     await reset_dut(dut)
 
-    # Apply input and enable for a few cycles
+    # First run with moderate input
     dut.current.value = float_to_fixed(0.3)
-    dut.enable.value = 1
-    await ClockCycles(dut.clk, 3)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
 
-    # Disable and check state holds
-    dut.enable.value = 0
-    spike_before = int(dut.spike.value)
-
-    # Run several cycles with enable=0
-    for i in range(5):
+    # Wait for completion
+    while int(dut.done.value) == 0:
         await RisingEdge(dut.clk)
-        spike_after = int(dut.spike.value)
-        assert spike_after == spike_before, f"Spike state should hold when enable=0 (cycle {i+1})"
 
-    dut._log.info("Enable hold state test passed")
+    dut._log.info("First run completed")
+
+    # Wait a few cycles
+    await ClockCycles(dut.clk, 5)
+
+    # Second run with different input
+    dut.current.value = float_to_fixed(1.5)
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    # Should spike on first timestep
+    await RisingEdge(dut.clk)
+    spike = int(dut.spike_out.value)
+    assert spike == 1, "Should spike with large input on second run"
+
+    dut._log.info("Multiple starts test passed")
 
 
 @cocotb.test()
@@ -283,20 +323,24 @@ async def test_lif_negative_input(dut):
     # Apply negative input (-0.5)
     negative_input = float_to_fixed(-0.5)
     dut.current.value = negative_input
-    dut.enable.value = 1
+    dut.start.value = 1
+
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
 
     # Should never spike with negative input
-    for i in range(10):
+    for i in range(30):
         await RisingEdge(dut.clk)
-        spike = int(dut.spike.value)
-        assert spike == 0, f"Should not spike with negative input (cycle {i+1})"
+        spike = int(dut.spike_out.value)
+        timestep = int(dut.timestep.value)
+        assert spike == 0, f"Should not spike with negative input at timestep {timestep}"
 
     dut._log.info("Negative input test passed")
 
 
 @cocotb.test()
 async def test_lif_beta_decay(dut):
-    """Test that membrane decays when input is removed."""
+    """Test that membrane decays with zero input."""
 
     # Start clock
     clock = Clock(dut.clk, 10, units="ns")
@@ -304,20 +348,23 @@ async def test_lif_beta_decay(dut):
 
     await reset_dut(dut)
 
-    # Build up some membrane potential (but not enough to spike)
-    dut.current.value = float_to_fixed(0.5)
-    dut.enable.value = 1
-    await ClockCycles(dut.clk, 2)  # membrane ~ 0.5 + 0.45 = 0.95
-
-    # Remove input
+    # Apply zero input - membrane should decay toward 0 with beta=0.9
+    # Starting from 0, it should stay at 0
     dut.current.value = 0
+    dut.start.value = 1
 
-    # Membrane should decay toward 0 with beta=0.9
-    # After removing input, membrane should decrease each cycle
-    # We just verify no spike occurs and the neuron stays quiet
-    for i in range(10):
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    # Verify no spike occurs throughout
+    for i in range(30):
         await RisingEdge(dut.clk)
-        spike = int(dut.spike.value)
-        assert spike == 0, f"Should not spike during decay (cycle {i+1})"
+        spike = int(dut.spike_out.value)
+        membrane = int(dut.membrane_out.value)
+        timestep = int(dut.timestep.value)
+
+        # With zero input and starting from zero, membrane should stay at 0
+        assert spike == 0, f"Should not spike with zero input at timestep {timestep}"
+        assert membrane == 0, f"Membrane should be 0 with zero input at timestep {timestep}"
 
     dut._log.info("Beta decay test passed")
