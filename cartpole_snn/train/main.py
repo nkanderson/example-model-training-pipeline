@@ -9,6 +9,11 @@ import torch.optim as optim
 from snntorch import surrogate
 from snn_policy import SNNPolicy
 from dqn_agent import DQNAgent, ReplayMemory
+from scripts.history_coefficients import (
+    get_bitshift_amounts,
+    get_slow_decay_bitshift_amounts,
+    get_custom_bitshift_amounts,
+)
 import matplotlib
 
 # Use non-interactive backend if no display is available (e.g., headless/tmux)
@@ -234,6 +239,23 @@ if __name__ == "__main__":
         lam = config["snn"].get("lam", 0.111)
         history_length = config["snn"].get("history_length", 256)
         dt = config["snn"].get("dt", 1.0)
+
+        # BitshiftLIF parameter (optional, used only if neuron_type == "bitshift")
+        shift_func_name = config["snn"].get("shift_func", None)
+        # Map simple string name to actual function
+        shift_func = None
+        if shift_func_name:
+            if shift_func_name == "simple":
+                shift_func = get_bitshift_amounts
+            elif shift_func_name == "slow_decay":
+                shift_func = get_slow_decay_bitshift_amounts
+            elif shift_func_name == "custom":
+                shift_func = get_custom_bitshift_amounts
+            else:
+                raise ValueError(
+                    f"Unknown shift_func: {shift_func_name}. "
+                    f"Valid options: 'simple', 'slow_decay', 'custom'"
+                )
     else:
         # No config file - will load everything from model checkpoint
         # Set placeholder defaults (will be overridden by checkpoint values)
@@ -256,6 +278,7 @@ if __name__ == "__main__":
         lam = 0.111
         history_length = 64
         dt = 1.0
+        shift_func = None  # No shift_func in placeholder defaults
 
     # Apply other parsed arguments
     pretrained_file = args.load
@@ -365,6 +388,7 @@ if __name__ == "__main__":
             lam=net_lam,
             history_length=net_history_length,
             dt=net_dt,
+            shift_func=shift_func,
         ).to(device)
         target_net = SNNPolicy(
             n_observations,
@@ -379,6 +403,7 @@ if __name__ == "__main__":
             lam=net_lam,
             history_length=net_history_length,
             dt=net_dt,
+            shift_func=shift_func,
         ).to(device)
         optimizer = optim.AdamW(policy_net.parameters(), lr=lr, amsgrad=True)
 
@@ -434,6 +459,7 @@ if __name__ == "__main__":
             lam=lam,
             history_length=history_length,
             dt=dt,
+            shift_func=shift_func,
         ).to(device)
         target_net = SNNPolicy(
             n_observations,
@@ -448,6 +474,7 @@ if __name__ == "__main__":
             lam=lam,
             history_length=history_length,
             dt=dt,
+            shift_func=shift_func,
         ).to(device)
 
         # Create optimizer
