@@ -56,7 +56,7 @@ class SNNPolicy(nn.Module):
                          (fractional/bitshift neurons, default: 256)
         - dt: discrete timestep for approximation (fractional/bitshift neurons, default: 1.0)
         - shift_func: shift amount function for bitshift neurons. Pass the actual function object
-                     (e.g., get_bitshift_amounts) not a string name
+                     (e.g., simple_bitshift) not a string name
                      (bitshift neurons only, required if neuron_type='bitshift')
         """
         super().__init__()

@@ -21,7 +21,7 @@ snn:
   hidden2_size: 16 # Neurons in second hidden layer
 
   # BitshiftLIF specific parameters (used only when neuron_type: bitshift)
-  shift_func: simple # Shift function type: 'simple', 'slow_decay', or 'custom'
+  shift_func: simple # Shift function type: 'simple', 'slow_decay', 'custom', or 'custom_slow_decay'
   lam: 0.111 # Leakage parameter (matches beta=0.9 for comparison to standard LIF)
   history_length:
     16 # Number of past values for bitshift approximation

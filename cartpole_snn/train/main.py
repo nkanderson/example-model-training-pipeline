@@ -10,9 +10,10 @@ from snntorch import surrogate
 from snn_policy import SNNPolicy
 from dqn_agent import DQNAgent, ReplayMemory
 from scripts.history_coefficients import (
-    get_bitshift_amounts,
-    get_slow_decay_bitshift_amounts,
-    get_custom_bitshift_amounts,
+    simple_bitshift,
+    slow_decay_bitshift,
+    custom_bitshift,
+    custom_slow_decay_bitshift,
 )
 import matplotlib
 
@@ -246,15 +247,17 @@ if __name__ == "__main__":
         shift_func = None
         if shift_func_name:
             if shift_func_name == "simple":
-                shift_func = get_bitshift_amounts
+                shift_func = simple_bitshift
             elif shift_func_name == "slow_decay":
-                shift_func = get_slow_decay_bitshift_amounts
+                shift_func = slow_decay_bitshift
             elif shift_func_name == "custom":
-                shift_func = get_custom_bitshift_amounts
+                shift_func = custom_bitshift
+            elif shift_func_name == "custom_slow_decay":
+                shift_func = custom_slow_decay_bitshift
             else:
                 raise ValueError(
                     f"Unknown shift_func: {shift_func_name}. "
-                    f"Valid options: 'simple', 'slow_decay', 'custom'"
+                    f"Valid options: 'simple', 'slow_decay', 'custom', 'custom_slow_decay'"
                 )
     else:
         # No config file - will load everything from model checkpoint

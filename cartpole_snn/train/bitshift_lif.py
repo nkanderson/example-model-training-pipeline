@@ -29,7 +29,7 @@ class BitshiftLIF(snn.Leaky):
               but passed to parent. Use lam instead for fractional leak.
         shift_func: Function that takes history_length and returns list of integer shift amounts.
                    Should be callable as: shifts = shift_func(history_length)
-                   Examples: get_bitshift_amounts, get_slow_decay_bitshift_amounts
+                   Examples: simple_bitshift, slow_decay_bitshift, custom_slow_decay_bitshift
         lam: Leakage parameter in fractional equation (>= 0). Default: 0.111 (matches beta=0.9)
         history_length: Number of past values for approximation. Default: 256
         dt: Discrete timestep for approximation. Default: 1.0
@@ -44,7 +44,7 @@ class BitshiftLIF(snn.Leaky):
         The alpha value cannot be changed as the bit-shift sequences are designed
         specifically for alpha=0.5 approximation.
 
-        WARNING: When using simple bit-shift functions (like get_bitshift_amounts), keep
+        WARNING: When using simple bit-shift functions (like simple_bitshift), keep
         history_length <= 20 to avoid numerical instability. For longer histories, use
         slow_decay or custom shift functions that prevent coefficients from becoming
         too small (e.g., 2^-63 ≈ 1e-19).
@@ -53,8 +53,8 @@ class BitshiftLIF(snn.Leaky):
         forward(input, mem) -> (spike, mem) or spike (if init_hidden=True and output=False)
 
     Example:
-        >>> from scripts.history_coefficients import get_bitshift_amounts
-        >>> neuron = BitshiftLIF(shift_func=get_bitshift_amounts, history_length=64)
+        >>> from scripts.history_coefficients import simple_bitshift
+        >>> neuron = BitshiftLIF(shift_func=simple_bitshift, history_length=64)
     """
 
     def __init__(
