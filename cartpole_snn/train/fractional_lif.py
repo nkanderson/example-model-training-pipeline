@@ -167,16 +167,49 @@ class FractionalLIF(snn.Leaky):
         # Extract past coefficients (skip g_0=1 which multiplies V[n])
         coeffs_past = coeffs[1:]
 
-        # History convolution using simple multiply-accumulate
-        # coeffs_past shape: (history_length-1,)
-        # hist shape: (history_length, batch, features)
-        # We want: Σ coeffs_past[k] * hist[k] for k=0..history_length-2
+        # ============================================================
+        # TENSOR SHAPE EXPLANATION
+        # ============================================================
+        # self.hist is a 3D tensor storing membrane potential history for all neurons
+        # in this layer, across all samples in a batch:
+        #
+        #   self.hist shape: (history_length, batch, features)
+        #                     ^              ^      ^
+        #                     |              |      |
+        #                     |              |      +-- Each neuron in this layer
+        #                     |              |          (e.g., 32 neurons = 32 features)
+        #                     |              |
+        #                     |              +-- Independent samples being processed together
+        #                     |                  (e.g., batch=128 during training, batch=1 during inference)
+        #                     |
+        #                     +-- Time dimension: past membrane values
+        #                         hist[0] = most recent (V[n-1])
+        #                         hist[1] = one step older (V[n-2])
+        #                         hist[k] = V[n-k-1]
+        #
+        # WHY 3D? Each sample in a batch is independent (different episode/state),
+        # so each needs its own history. We process them in parallel for efficiency.
+        # ============================================================
+
+        # Slice to get H-1 past values (matches H-1 coefficients after excluding g_0)
+        # history_length = number of GL coefficients computed, so effective history depth = H-1
         history_valid = self.hist[: self.history_length - 1]  # (H-1, batch, features)
 
-        # Reshape coeffs for broadcasting: (H-1, 1, 1) -> broadcasts to (H-1, batch, features)
+        # ============================================================
+        # BROADCASTING FOR VECTORIZED MULTIPLY-ACCUMULATE
+        # ============================================================
+        # Goal: Compute Σ_{k=0}^{H-2} coeffs_past[k] * history_valid[k] for each (batch, neuron)
+        #
+        # coeffs_past is 1D: (H-1,) — one scalar coefficient per time step
+        # history_valid is 3D: (H-1, batch, features) — values for all neurons/samples
+        #
+        # To multiply, we reshape coeffs to (H-1, 1, 1) so PyTorch broadcasts:
+        #   (H-1, 1, 1) * (H-1, batch, features) → (H-1, batch, features)
+        #
+        # Each coefficient c[k] multiplies all neurons and all batch samples at time k.
+        # Then .sum(dim=0) collapses the time dimension → (batch, features)
+        # ============================================================
         coeffs_reshaped = coeffs_past.view(-1, 1, 1)
-
-        # Element-wise multiply and sum over time dimension (much faster than einsum)
         history_sum = (coeffs_reshaped * history_valid).sum(dim=0)  # (batch, features)
 
         # Compute new membrane potential
