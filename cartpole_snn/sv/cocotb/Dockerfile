@@ -25,8 +25,8 @@ FROM base AS oss-cad-suite
 # Install oss-cad-suite (includes Verilator, Yosys, cocotb, and other tools)
 # This layer is cached unless the version changes
 # Note: The tarball filename uses format YYYYMMDD (no dashes) while the release tag uses YYYY-MM-DD
-ARG OSS_CAD_SUITE_VERSION=2024-12-29
-ARG OSS_CAD_SUITE_DATE=20241229
+ARG OSS_CAD_SUITE_VERSION=2026-01-14
+ARG OSS_CAD_SUITE_DATE=20260114
 RUN wget -q https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${OSS_CAD_SUITE_VERSION}/oss-cad-suite-linux-x64-${OSS_CAD_SUITE_DATE}.tgz \
   && tar -xzf oss-cad-suite-linux-x64-${OSS_CAD_SUITE_DATE}.tgz -C /opt \
   && rm oss-cad-suite-linux-x64-${OSS_CAD_SUITE_DATE}.tgz
