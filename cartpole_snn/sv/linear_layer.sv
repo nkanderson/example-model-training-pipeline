@@ -126,11 +126,11 @@ module linear_layer #(
                     output_valid <= 1'b1;
 
                     // Check if this is the last neuron
-                    if (neuron_idx == NUM_OUTPUTS - 1) begin
+                    if (neuron_idx == IDX_WIDTH'(NUM_OUTPUTS - 1)) begin
                         done <= 1'b1;
                         state <= IDLE;
                     end else begin
-                        neuron_idx <= neuron_idx + 1;
+                        neuron_idx <= neuron_idx + 1'b1;
                     end
                 end
 
