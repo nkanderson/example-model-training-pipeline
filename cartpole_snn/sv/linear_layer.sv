@@ -9,11 +9,12 @@
 // Weights are stored in row-major order in a flattened array:
 //   weights_flat[n*NUM_INPUTS + i] = weight for output n, input i
 //
-// Timing:
-//   - Assert 'start' for one cycle with valid inputs
-//   - Each of next NUM_OUTPUTS cycles: output_valid asserted with output_current and output_idx
-//   - 'done' asserts on final output cycle
-//   - Outputs remain valid until next 'start'
+// Timing (registered outputs for clean timing closure):
+//   - Cycle 0: Assert 'start' for one cycle with valid inputs
+//   - Cycle 1: Inputs latched, state transitions to COMPUTING
+//   - Cycle 2: First output valid (output_valid=1, output_idx=0)
+//   - Cycle 2+N: Output N valid, done asserts on final output (N = NUM_OUTPUTS-1)
+//   - Total latency: 1 + NUM_OUTPUTS cycles from start to done
 
 module linear_layer #(
     parameter NUM_INPUTS = 4,
