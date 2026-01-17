@@ -1,11 +1,12 @@
 # Makefile for running cocotb tests on SNN modules
 #
 # Usage:
-#   make                    # Run LIF tests (default)
-#   make test_lif           # Run LIF tests
-#   make test_linear_layer  # Run linear_layer tests
-#   make test_spike_buffer  # Run spike_buffer tests
-#   make clean              # Clean build artifacts
+#   make                      # Run LIF tests (default)
+#   make test_lif             # Run LIF tests
+#   make test_linear_layer    # Run linear_layer tests
+#   make test_spike_buffer    # Run spike_buffer tests
+#   make test_membrane_buffer # Run membrane_buffer tests
+#   make clean                # Clean build artifacts
 
 # Default test module
 TEST ?= lif
@@ -23,8 +24,20 @@ else ifeq ($(TEST),spike_buffer)
     VERILOG_SOURCES = $(PWD)/../sv/spike_buffer.sv
     TOPLEVEL = spike_buffer
     MODULE = test_spike_buffer
+else ifeq ($(TEST),membrane_buffer)
+    VERILOG_SOURCES = $(PWD)/../sv/membrane_buffer.sv
+    TOPLEVEL = membrane_buffer
+    MODULE = test_membrane_buffer
+else ifeq ($(TEST),neuron_membrane_buffer)
+    VERILOG_SOURCES = $(PWD)/../sv/neuron_membrane_buffer.sv
+    TOPLEVEL = neuron_membrane_buffer
+    MODULE = test_neuron_membrane_buffer
+else ifeq ($(TEST),q_accumulator)
+    VERILOG_SOURCES = $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = q_accumulator
+    MODULE = test_q_accumulator
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'linear_layer', or 'spike_buffer')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'linear_layer', 'spike_buffer', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -42,6 +55,18 @@ ifeq ($(SIM),icarus)
     endif
     ifeq ($(TEST),spike_buffer)
         COMPILE_ARGS += -Pspike_buffer.NUM_NEURONS=8 -Pspike_buffer.NUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),membrane_buffer)
+        COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
+    endif
+    ifeq ($(TEST),neuron_membrane_buffer)
+        COMPILE_ARGS += -Pneuron_membrane_buffer.NUM_TIMESTEPS=8
+    endif
+    ifeq ($(TEST),q_accumulator)
+        COMPILE_ARGS += -Pq_accumulator.NUM_NEURONS=4 -Pq_accumulator.NUM_TIMESTEPS=4
+        COMPILE_ARGS += -Pq_accumulator.NUM_ACTIONS=2 -Pq_accumulator.BATCH_SIZE=2
+        COMPILE_ARGS += -Pq_accumulator.WEIGHTS_FILE=\"$(PWD)/weights/q_accum_weights.mem\"
+        COMPILE_ARGS += -Pq_accumulator.BIAS_FILE=\"$(PWD)/weights/q_accum_bias.mem\"
     endif
 endif
 
@@ -65,10 +90,19 @@ test_linear_layer:
 test_spike_buffer:
 	$(MAKE) TEST=spike_buffer
 
+test_membrane_buffer:
+	$(MAKE) TEST=membrane_buffer
+
+test_neuron_membrane_buffer:
+	$(MAKE) TEST=neuron_membrane_buffer
+
+test_q_accumulator:
+	$(MAKE) TEST=q_accumulator
+
 # Clean up generated files
 clean::
 	rm -rf $(RESULTS_DIR)/*
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_linear_layer test_spike_buffer
+.PHONY: clean test_lif test_linear_layer test_spike_buffer test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
