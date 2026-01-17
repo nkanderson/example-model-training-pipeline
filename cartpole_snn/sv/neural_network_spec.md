@@ -171,6 +171,82 @@ module membrane_buffer #(
 2. Synchronize across all neurons for each timestep
 3. Provide full membrane vector to output linear layer (fc_out)
 
+### 5. `neuron_membrane_buffer` Module
+
+**Purpose**: Per-neuron buffer storing membrane potentials across all timesteps (alternative to centralized membrane_buffer)
+
+**Interface**:
+```systemverilog
+module neuron_membrane_buffer #(
+    parameter NUM_TIMESTEPS = 30,
+    parameter MEMBRANE_WIDTH = 24
+) (
+    input wire clk,
+    input wire reset,
+    input wire clear,                                    // Clear buffer for new inference
+    input wire write_en,                                 // Write enable
+    input wire [$clog2(NUM_TIMESTEPS)-1:0] write_timestep, // Which timestep to write
+    input wire signed [MEMBRANE_WIDTH-1:0] membrane_in,  // Membrane value to store
+    input wire [$clog2(NUM_TIMESTEPS)-1:0] read_timestep, // Which timestep to read
+    output logic signed [MEMBRANE_WIDTH-1:0] membrane_out, // Combinational read
+    output logic full                                    // All timesteps written
+);
+```
+
+**Behavior**:
+1. Each LIF neuron in the final hidden layer gets its own instance
+2. LIF writes membrane potential each timestep with `write_en` and `write_timestep`
+3. `q_accumulator` reads via shared `read_timestep` (broadcast to all buffers)
+4. Avoids fan-out issue of centralized buffer (no 384-wire bus to route)
+
+**Resource Usage**:
+- Per instance: NUM_TIMESTEPS × MEMBRANE_WIDTH bits = 30 × 24 = 720 bits
+- 16 instances total: 11,520 bits (~1.4KB)
+
+### 6. `q_accumulator` Module
+
+**Purpose**: Compute Q-values by accumulating weighted membrane potentials across all timesteps
+
+**Interface**:
+```systemverilog
+module q_accumulator #(
+    parameter NUM_NEURONS = 16,
+    parameter NUM_TIMESTEPS = 30,
+    parameter NUM_ACTIONS = 2,
+    parameter BATCH_SIZE = 4,            // Neurons processed per cycle
+    parameter DATA_WIDTH = 16,
+    parameter MEMBRANE_WIDTH = 24,
+    parameter FRAC_BITS = 13,
+    parameter WEIGHTS_FILE = "fc_out_weights.mem",
+    parameter BIAS_FILE = "fc_out_bias.mem"
+) (
+    input wire clk,
+    input wire reset,
+    input wire start,
+    output logic [$clog2(NUM_TIMESTEPS)-1:0] read_timestep, // Shared to all buffers
+    input wire signed [MEMBRANE_WIDTH-1:0] membrane_in [0:NUM_NEURONS-1],
+    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    output logic done
+);
+```
+
+**Behavior**:
+1. When `start` asserted, begin reading from all neuron membrane buffers
+2. Process BATCH_SIZE neurons per cycle (parallel multipliers)
+3. Accumulate: `Q[a] += Σ(w[a][n] × membrane[n][t]) + bias[a]` for each timestep
+4. After all timesteps, divide by NUM_TIMESTEPS and saturate
+5. Assert `done` when `q_values` are ready
+
+**Resource Usage**:
+- Multipliers: BATCH_SIZE × NUM_ACTIONS (e.g., 4 × 2 = 8 multipliers)
+- Accumulators: NUM_ACTIONS wide accumulators (64-bit each)
+- Weights: NUM_ACTIONS × NUM_NEURONS × 16 bits
+
+**Timing**:
+- Latency: NUM_TIMESTEPS × (NUM_NEURONS / BATCH_SIZE) + 2 cycles
+- With defaults (BATCH_SIZE=4): 30 × 4 + 2 = 122 cycles
+- Configurable: BATCH_SIZE=1 → 482 cycles, BATCH_SIZE=16 → 32 cycles
+
 ## Pipelined Execution Flow
 
 ### Critical Path Analysis
@@ -246,34 +322,34 @@ Cycle 556: LIF2[0] completes timestep 29 (started at cycle 78, runs for 30 cycle
 Cycle 571: LIF2[15] completes timestep 29 (started at cycle 542, runs for 30 cycles)
 ```
 
-### Phase 4: Output Layer - Process All Timesteps (Cycles 556-615)
+### Phase 4: Output Layer - Q-Value Accumulation (Cycles 556-677)
 
-**membrane_buffer[0]**: Collects membrane potentials (not spikes) from 16 neurons in hidden layer 2
+**Per-neuron membrane buffers**: Each of the 16 LIF neurons in hidden layer 2 writes to its own `neuron_membrane_buffer` as it computes each timestep. By cycle 571, all buffers are full.
 
-For **each** of the 30 timesteps, linear_layer[2] (fc_out) processes 16 membrane potentials:
+**q_accumulator**: Reads from all 16 buffers via shared `read_timestep`, processes in batches:
 
-**Timestep 0** (Cycles 556-557):
 ```
-Cycle 556: membrane_buffer[0] provides 16 membrane values from timestep 0
-           linear_layer[2] outputs q[0] (Q-value for action 0)
-Cycle 557: linear_layer[2] outputs q[1] (Q-value for action 1)
-           Q_accum[0] += q[0], Q_accum[1] += q[1]
+Cycle 572: q_accumulator starts, read_timestep = 0
+           Batch 0: neurons 0-3 × actions 0-1 (8 multiplications)
+Cycle 573: Batch 1: neurons 4-7 × actions 0-1
+Cycle 574: Batch 2: neurons 8-11 × actions 0-1
+Cycle 575: Batch 3: neurons 12-15 × actions 0-1, add biases
+           Q_accum[0] += Σ(w[0][n] × membrane[n][0]) + bias[0]
+           Q_accum[1] += Σ(w[1][n] × membrane[n][0]) + bias[1]
+           read_timestep = 1
+...
+Cycle 692: Last batch of timestep 29 complete
+Cycle 693: Divide Q_accum by NUM_TIMESTEPS
+Cycle 694: Saturate and output final Q-values, done = 1
 ```
 
-**Pattern continues**: 30 timesteps × 2 cycles/timestep = 60 cycles
+**Total cycles for q_accumulator**: 30 timesteps × 4 batches + 2 = 122 cycles
 
-**Cycles 556-615**: Output layer accumulates Q-values across all timesteps
-
-### Phase 5: Q-Value Normalization and Action Selection (Cycles 616-617)
+### Phase 5: Action Selection (Cycle 695)
 ```
-Cycle 616: Divide accumulated Q-values by number of timesteps (30)
-           Q_final[0] = Q_accum[0] / 30
-           Q_final[1] = Q_accum[1] / 30
-Cycle 617: Compare Q_final[0] vs Q_final[1]
+Cycle 695: Compare Q_final[0] vs Q_final[1]
            Output action = argmax(Q_final) → 0 (left) or 1 (right)
 ```
-
-**Note**: Division by 30 matches snn_policy.py behavior: `q_values = out_accum / float(self.num_steps)`
 
 ## Total Latency
 
@@ -282,14 +358,23 @@ Cycle 617: Compare Q_final[0] vs Q_final[1]
 - **Hidden Layer 1 complete**: +29 cycles (for last neuron to finish all timesteps) = 93 cycles total
 - **Hidden Layer 2 process all timesteps**: 30 timesteps × 16 cycles = 480 cycles (cycles 63-542)
 - **Hidden Layer 2 complete**: +29 cycles (for last neuron to finish) = cycle 571
-- **Output layer process all timesteps**: 30 timesteps × 2 cycles = 60 cycles (cycles 556-615)
-- **Q-value normalization and action selection**: 2 cycles
+- **q_accumulator**: 30 timesteps × 4 batches + 2 = 122 cycles (cycles 572-694)
+- **Action selection**: 1 cycle
 
-**Total**: **617 cycles per inference**
+**Total**: **~695 cycles per inference**
 
-@ 100MHz = **6.17µs per inference**
+@ 100MHz = **~7µs per inference**
 
 **Note**: This is fast enough for real-time CartPole control (typical requirement < 20ms response time)
+
+**Latency tradeoffs for q_accumulator**:
+| BATCH_SIZE | Multipliers | Cycles | Total Latency |
+|------------|-------------|--------|---------------|
+| 1          | 2           | 482    | ~1050 cycles  |
+| 2          | 4           | 242    | ~815 cycles   |
+| 4 (default)| 8           | 122    | ~695 cycles   |
+| 8          | 16          | 62     | ~635 cycles   |
+| 16         | 32          | 32     | ~605 cycles   |
 
 ## Weight File Format
 
@@ -320,28 +405,41 @@ Weights exported from snn_policy.py must be formatted as:
 ### Linear Layers
 - **fc1**: 4 multipliers, 64×4×16 = 4096 bits weights, 64×16 = 1024 bits bias
 - **fc2**: 64 multipliers, 16×64×16 = 16384 bits weights, 16×16 = 256 bits bias
-- **fc_out**: 16 multipliers, 2×16×16 = 512 bits weights, 2×16 = 32 bits bias
+
+### q_accumulator (replaces fc_out linear layer)
+- **Multipliers**: BATCH_SIZE × NUM_ACTIONS = 8 (with BATCH_SIZE=4)
+- **Weights**: 2×16×16 = 512 bits
+- **Biases**: 2×16 = 32 bits
+- **Accumulators**: 2 × 64-bit = 128 bits
 
 ### LIF Neurons
 - **Hidden Layer 1**: 64 instances × (1 multiplier + 24-bit membrane) = 64 multipliers, 1536 bits state
 - **Hidden Layer 2**: 16 instances × (1 multiplier + 24-bit membrane) = 16 multipliers, 384 bits state
 
+### Membrane Buffers
+- **neuron_membrane_buffer**: 16 instances × 30 timesteps × 24 bits = 11,520 bits (~1.4KB)
+
 ### Total Resource Usage
-- **Multipliers**: 4 + 64 + 16 + 64 + 16 = 164 (plus multipliers for fractional-order neurons if used)
-- **Memory**: ~22KB for weights + ~2KB for state
+- **Multipliers**: 4 + 64 + 64 + 16 + 8 = 156
+- **Memory**: ~22KB for weights + ~3KB for buffers and state
 
 ## Buffer Placement
 
-Two buffer modules are required for synchronization:
+Three buffer types are required for synchronization:
 
 1. **spike_buffer[0]**: Between Hidden Layer 1 LIF neurons and linear_layer[1]
    - Collects 64 spikes per timestep
    - Provides synchronized spike vectors to linear_layer[1]
 
-2. **membrane_buffer[0]**: Between Hidden Layer 2 LIF neurons and linear_layer[2] (fc_out)
-   - Collects 16 membrane potentials (24-bit each) per timestep
-   - Provides synchronized membrane vectors to output layer
-   - **Critical**: fc_out operates on membrane potentials, not spikes (per snn_policy.py)
+2. **neuron_membrane_buffer[0..15]**: One per LIF neuron in Hidden Layer 2
+   - Each stores 30 membrane potentials (24-bit each)
+   - LIF writes membrane each timestep; q_accumulator reads via shared `read_timestep`
+   - Avoids routing 384-wire bus from centralized buffer
+
+3. **q_accumulator**: Replaces linear_layer[2] (fc_out) for output
+   - Reads from all 16 neuron_membrane_buffers
+   - Computes weighted sums, accumulates across timesteps, averages
+   - Outputs final Q-values directly
 
 ## Software Integration
 
