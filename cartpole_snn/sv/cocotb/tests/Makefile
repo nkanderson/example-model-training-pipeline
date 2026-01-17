@@ -4,6 +4,7 @@
 #   make                    # Run LIF tests (default)
 #   make test_lif           # Run LIF tests
 #   make test_linear_layer  # Run linear_layer tests
+#   make test_spike_buffer  # Run spike_buffer tests
 #   make clean              # Clean build artifacts
 
 # Default test module
@@ -18,9 +19,12 @@ else ifeq ($(TEST),linear_layer)
     VERILOG_SOURCES = $(PWD)/../sv/linear_layer.sv
     TOPLEVEL = linear_layer
     MODULE = test_linear_layer
-    # Parameters are set differently per simulator (see below)
+else ifeq ($(TEST),spike_buffer)
+    VERILOG_SOURCES = $(PWD)/../sv/spike_buffer.sv
+    TOPLEVEL = spike_buffer
+    MODULE = test_spike_buffer
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif' or 'linear_layer')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'linear_layer', or 'spike_buffer')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -35,6 +39,9 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Plinear_layer.NUM_INPUTS=4 -Plinear_layer.NUM_OUTPUTS=4
         COMPILE_ARGS += -Plinear_layer.WEIGHTS_FILE=\"$(PWD)/weights/test_weights.mem\"
         COMPILE_ARGS += -Plinear_layer.BIAS_FILE=\"$(PWD)/weights/test_bias.mem\"
+    endif
+    ifeq ($(TEST),spike_buffer)
+        COMPILE_ARGS += -Pspike_buffer.NUM_NEURONS=8 -Pspike_buffer.NUM_TIMESTEPS=4
     endif
 endif
 
@@ -55,10 +62,13 @@ test_lif:
 test_linear_layer:
 	$(MAKE) TEST=linear_layer
 
+test_spike_buffer:
+	$(MAKE) TEST=spike_buffer
+
 # Clean up generated files
 clean::
 	rm -rf $(RESULTS_DIR)/*
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_linear_layer
+.PHONY: clean test_lif test_linear_layer test_spike_buffer
