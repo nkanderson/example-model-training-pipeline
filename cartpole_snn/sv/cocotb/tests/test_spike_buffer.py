@@ -17,8 +17,8 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
 
 # Test parameters (should match module instantiation)
-NUM_NEURONS = 8      # Small for testing
-NUM_TIMESTEPS = 4    # Small for testing
+NUM_NEURONS = 8  # Small for testing
+NUM_TIMESTEPS = 4  # Small for testing
 
 
 async def reset_dut(dut):
@@ -67,14 +67,14 @@ def generate_spike_pattern(cycle: int, pattern: str = "all") -> int:
         elif pattern == "none":
             spike = False
         elif pattern == "even":
-            spike = (n % 2 == 0)
+            spike = n % 2 == 0
         elif pattern == "odd":
-            spike = (n % 2 == 1)
+            spike = n % 2 == 1
         elif pattern == "timestep":
-            spike = (ts % 2 == 0)
+            spike = ts % 2 == 0
 
         if spike:
-            spike_in |= (1 << n)
+            spike_in |= 1 << n
 
     return spike_in
 
@@ -83,7 +83,7 @@ def generate_spike_pattern(cycle: int, pattern: str = "all") -> int:
 async def test_spike_buffer_reset(dut):
     """Test that reset properly initializes the spike buffer."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     # Apply reset
@@ -104,7 +104,7 @@ async def test_spike_buffer_reset(dut):
 async def test_spike_buffer_all_spikes(dut):
     """Test collection with all neurons spiking on all timesteps."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -134,21 +134,29 @@ async def test_spike_buffer_all_spikes(dut):
             # Only record if this is a new timestep
             if len(timesteps_seen) == 0 or timesteps_seen[-1] != ts:
                 timesteps_seen.append(ts)
-                dut._log.info(f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}")
+                # NOTE: cycle starts from 1 in this loop, so it is the actual count
+                # and not the zero-indexed cycle number
+                dut._log.info(
+                    f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}"
+                )
 
                 # With "all" pattern, all neurons should have spiked
                 expected = (1 << NUM_NEURONS) - 1
-                assert spikes == expected, f"Expected all spikes (0x{expected:x}), got 0x{spikes:x}"
+                assert (
+                    spikes == expected
+                ), f"Expected all spikes (0x{expected:x}), got 0x{spikes:x}"
 
         if dut.done.value == 1:
             dut._log.info(f"Cycle {cycle}: done asserted")
             break
 
     # Verify we saw all timesteps
-    assert len(timesteps_seen) == NUM_TIMESTEPS, \
-        f"Expected {NUM_TIMESTEPS} timesteps, saw {len(timesteps_seen)}"
-    assert timesteps_seen == list(range(NUM_TIMESTEPS)), \
-        f"Timesteps out of order: {timesteps_seen}"
+    assert (
+        len(timesteps_seen) == NUM_TIMESTEPS
+    ), f"Expected {NUM_TIMESTEPS} timesteps, saw {len(timesteps_seen)}"
+    assert timesteps_seen == list(
+        range(NUM_TIMESTEPS)
+    ), f"Timesteps out of order: {timesteps_seen}"
     assert dut.done.value == 1, "done should be asserted"
 
     dut._log.info("All spikes test passed")
@@ -158,7 +166,7 @@ async def test_spike_buffer_all_spikes(dut):
 async def test_spike_buffer_no_spikes(dut):
     """Test collection with no neurons spiking."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -192,7 +200,7 @@ async def test_spike_buffer_no_spikes(dut):
 async def test_spike_buffer_even_neurons(dut):
     """Test collection with only even-indexed neurons spiking."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -208,7 +216,7 @@ async def test_spike_buffer_even_neurons(dut):
     # Expected pattern: neurons 0, 2, 4, 6 spike (for 8 neurons)
     expected = 0
     for n in range(0, NUM_NEURONS, 2):
-        expected |= (1 << n)
+        expected |= 1 << n
 
     for cycle in range(1, total_cycles + 5):
         dut.spike_in.value = generate_spike_pattern(cycle, "even")
@@ -217,8 +225,12 @@ async def test_spike_buffer_even_neurons(dut):
         if dut.timestep_ready.value == 1:
             spikes = int(dut.spikes_out.value)
             ts = int(dut.timestep_out.value)
-            dut._log.info(f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}")
-            assert spikes == expected, f"Expected 0b{expected:0{NUM_NEURONS}b}, got 0b{spikes:0{NUM_NEURONS}b}"
+            dut._log.info(
+                f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}"
+            )
+            assert (
+                spikes == expected
+            ), f"Expected 0b{expected:0{NUM_NEURONS}b}, got 0b{spikes:0{NUM_NEURONS}b}"
 
         if dut.done.value == 1:
             break
@@ -231,7 +243,7 @@ async def test_spike_buffer_even_neurons(dut):
 async def test_spike_buffer_timestep_pattern(dut):
     """Test collection where neurons spike only on even timesteps."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -251,15 +263,19 @@ async def test_spike_buffer_timestep_pattern(dut):
         if dut.timestep_ready.value == 1:
             spikes = int(dut.spikes_out.value)
             ts = int(dut.timestep_out.value)
-            dut._log.info(f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}")
+            dut._log.info(
+                f"Cycle {cycle}: timestep {ts} ready, spikes=0b{spikes:0{NUM_NEURONS}b}"
+            )
 
             # On even timesteps, all neurons spike; on odd, none
             if ts % 2 == 0:
                 expected = (1 << NUM_NEURONS) - 1
             else:
                 expected = 0
-            assert spikes == expected, \
-                f"Timestep {ts}: expected 0b{expected:0{NUM_NEURONS}b}, got 0b{spikes:0{NUM_NEURONS}b}"
+
+            assert (
+                spikes == expected
+            ), f"Timestep {ts}: expected 0b{expected:0{NUM_NEURONS}b}, got 0b{spikes:0{NUM_NEURONS}b}"
 
         if dut.done.value == 1:
             break
@@ -272,7 +288,7 @@ async def test_spike_buffer_timestep_pattern(dut):
 async def test_spike_buffer_timing(dut):
     """Test that timestep_ready asserts at the correct cycles."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -299,8 +315,8 @@ async def test_spike_buffer_timing(dut):
         if dut.timestep_ready.value == 1:
             ts = int(dut.timestep_out.value)
             if ts not in ready_cycles:
-                ready_cycles[ts] = cycle
-                dut._log.info(f"Timestep {ts} first ready at cycle {cycle}")
+                ready_cycles[ts] = cycle - 1
+                dut._log.info(f"Timestep {ts} first ready at cycle {cycle - 1}")
 
         if dut.done.value == 1:
             break
@@ -309,12 +325,15 @@ async def test_spike_buffer_timing(dut):
     # Note: cycle count starts after the start cycle, so actual ready cycle
     # is (T + NUM_NEURONS - 1) relative to start
     for ts in range(NUM_TIMESTEPS):
-        expected_cycle = ts + NUM_NEURONS
+        expected_cycle = (ts + NUM_NEURONS) - 1
         actual = ready_cycles.get(ts)
         assert actual is not None, f"Timestep {ts} was never ready"
-        assert actual == expected_cycle, \
-            f"Timestep {ts}: expected ready at cycle {expected_cycle}, actual cycle {actual}"
-        dut._log.info(f"Timestep {ts}: ready at cycle {actual} (expected {expected_cycle})")
+        assert (
+            actual == expected_cycle
+        ), f"Timestep {ts}: expected ready at cycle {expected_cycle}, actual cycle {actual}"
+        dut._log.info(
+            f"Timestep {ts}: ready at cycle {actual} (expected {expected_cycle})"
+        )
 
     dut._log.info("Timing test passed")
 
@@ -323,7 +342,7 @@ async def test_spike_buffer_timing(dut):
 async def test_spike_buffer_multiple_inferences(dut):
     """Test that the buffer can be restarted for multiple inferences."""
 
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -350,8 +369,9 @@ async def test_spike_buffer_multiple_inferences(dut):
             if dut.timestep_ready.value == 1:
                 spikes = int(dut.spikes_out.value)
                 ts = int(dut.timestep_out.value)
-                assert spikes == expected, \
-                    f"Inference {inference}, timestep {ts}: expected 0x{expected:x}, got 0x{spikes:x}"
+                assert (
+                    spikes == expected
+                ), f"Inference {inference}, timestep {ts}: expected 0x{expected:x}, got 0x{spikes:x}"
 
             if dut.done.value == 1:
                 dut._log.info(f"Inference {inference} complete at cycle {cycle}")
