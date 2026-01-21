@@ -36,12 +36,14 @@ module q_accumulator #(
 ) (
     input wire clk,
     input wire reset,
-    input wire start,                                    // Begin Q-value computation
-    
+    input wire start,                    // Begin Q-value computation
+
     // Interface to per-neuron membrane buffers
     output logic [$clog2(NUM_TIMESTEPS)-1:0] read_timestep,  // Shared timestep for all buffers
+    // NOTE: We may need to split this into multiple accumulators or reduce this fan in
+    // to BATCH_SIZE at a time if synthesis struggles with this size.
     input wire signed [MEMBRANE_WIDTH-1:0] membrane_in [0:NUM_NEURONS-1], // From all buffers
-    
+
     // Output Q-values
     output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
     output logic done
@@ -51,11 +53,15 @@ module q_accumulator #(
     localparam NUM_BATCHES = NUM_NEURONS / BATCH_SIZE;
     localparam BATCH_IDX_WIDTH = $clog2(NUM_BATCHES) > 0 ? $clog2(NUM_BATCHES) : 1;
 
+    // Counters
+    logic [$clog2(NUM_TIMESTEPS)-1:0] timestep_counter;
+    logic [BATCH_IDX_WIDTH-1:0] batch_counter;
+
     // Weights and biases
     // weights_flat[a * NUM_NEURONS + n] = weight for action a, neuron n
     logic signed [DATA_WIDTH-1:0] weights_flat [0:NUM_ACTIONS*NUM_NEURONS-1];
     logic signed [DATA_WIDTH-1:0] biases [0:NUM_ACTIONS-1];
-    
+
     initial begin
         $readmemh(WEIGHTS_FILE, weights_flat);
         $readmemh(BIAS_FILE, biases);
@@ -66,10 +72,10 @@ module q_accumulator #(
     // Sum across NUM_NEURONS: +log2(NUM_NEURONS) bits
     // Sum across NUM_TIMESTEPS: +log2(NUM_TIMESTEPS) bits
     localparam ACCUM_WIDTH = MEMBRANE_WIDTH + DATA_WIDTH + $clog2(NUM_NEURONS) + $clog2(NUM_TIMESTEPS) + 2;
-    
+
     // Q-value accumulators (one per action)
     logic signed [ACCUM_WIDTH-1:0] q_accum [0:NUM_ACTIONS-1];
-    
+
     // State machine
     typedef enum logic [2:0] {
         IDLE,
@@ -78,30 +84,26 @@ module q_accumulator #(
         DIVIDING,       // Divide by NUM_TIMESTEPS
         DONE_STATE
     } state_t;
-    
+
     state_t state;
-    
-    // Counters
-    logic [$clog2(NUM_TIMESTEPS)-1:0] timestep_counter;
-    logic [BATCH_IDX_WIDTH-1:0] batch_counter;
-    
+
     // Batch products - one per (action, batch_neuron) pair
     // Total: NUM_ACTIONS × BATCH_SIZE multipliers
     logic signed [MEMBRANE_WIDTH+DATA_WIDTH-1:0] products [0:NUM_ACTIONS-1][0:BATCH_SIZE-1];
-    
+
     // Batch sums per action
     logic signed [ACCUM_WIDTH-1:0] batch_sum [0:NUM_ACTIONS-1];
-    
+
     // Division result
     logic signed [ACCUM_WIDTH-1:0] q_divided [0:NUM_ACTIONS-1];
-    
+
     // Saturation bounds
     localparam signed [DATA_WIDTH-1:0] MAX_VAL = {1'b0, {(DATA_WIDTH-1){1'b1}}};
     localparam signed [DATA_WIDTH-1:0] MIN_VAL = {1'b1, {(DATA_WIDTH-1){1'b0}}};
 
     // Output read_timestep to buffers
     assign read_timestep = timestep_counter;
-    
+
     // Combinational: compute all products and batch sums
     always_comb begin
         int neuron_idx;
@@ -110,7 +112,7 @@ module q_accumulator #(
             for (int b = 0; b < BATCH_SIZE; b++) begin
                 // Neuron index = batch_counter * BATCH_SIZE + b
                 neuron_idx = batch_counter * BATCH_SIZE + b;
-                products[a][b] = membrane_in[neuron_idx] * 
+                products[a][b] = membrane_in[neuron_idx] *
                                  weights_flat[a * NUM_NEURONS + neuron_idx];
                 // Scale and add to batch sum
                 batch_sum[a] = batch_sum[a] + (products[a][b] >>> FRAC_BITS);
@@ -141,29 +143,32 @@ module q_accumulator #(
                         timestep_counter <= '0;
                         batch_counter <= '0;
                         state <= PROCESSING;
+                    end else begin
+                        state <= IDLE;
                     end
                 end
-                
+
                 PROCESSING: begin
                     // Add batch sums to accumulators (computed combinationally)
                     for (int a = 0; a < NUM_ACTIONS; a++) begin
                         q_accum[a] <= q_accum[a] + batch_sum[a];
                     end
-                    
+
                     // Move to next batch or timestep
                     if (batch_counter == BATCH_IDX_WIDTH'(NUM_BATCHES - 1)) begin
                         // Finished all batches for this timestep, add biases
                         for (int a = 0; a < NUM_ACTIONS; a++) begin
-                            q_accum[a] <= q_accum[a] + batch_sum[a] + 
+                            q_accum[a] <= q_accum[a] + batch_sum[a] +
                                          $signed({{(ACCUM_WIDTH-DATA_WIDTH){biases[a][DATA_WIDTH-1]}}, biases[a]});
                         end
                         batch_counter <= '0;
                         state <= NEXT_TIMESTEP;
                     end else begin
                         batch_counter <= batch_counter + 1'b1;
+                        state <= PROCESSING;
                     end
                 end
-                
+
                 NEXT_TIMESTEP: begin
                     if (timestep_counter == $clog2(NUM_TIMESTEPS)'(NUM_TIMESTEPS - 1)) begin
                         // All timesteps done, divide by NUM_TIMESTEPS
@@ -173,7 +178,7 @@ module q_accumulator #(
                         state <= PROCESSING;
                     end
                 end
-                
+
                 DIVIDING: begin
                     // Divide accumulated Q-values by NUM_TIMESTEPS
                     for (int a = 0; a < NUM_ACTIONS; a++) begin
@@ -181,7 +186,7 @@ module q_accumulator #(
                     end
                     state <= DONE_STATE;
                 end
-                
+
                 DONE_STATE: begin
                     // Saturate and output final Q-values
                     for (int a = 0; a < NUM_ACTIONS; a++) begin
@@ -194,8 +199,8 @@ module q_accumulator #(
                         end
                     end
                     done <= 1'b1;
-                    
-                    // Return to idle on next start
+
+                    // Return to processing on next start, else idle
                     if (start) begin
                         for (int a = 0; a < NUM_ACTIONS; a++) begin
                             q_accum[a] <= '0;
@@ -204,9 +209,11 @@ module q_accumulator #(
                         batch_counter <= '0;
                         done <= 1'b0;
                         state <= PROCESSING;
+                    end else begin
+                        state <= IDLE;
                     end
                 end
-                
+
                 default: state <= IDLE;
             endcase
         end
