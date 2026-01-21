@@ -74,6 +74,13 @@ docker compose exec cocotb bash
 make test_lif
 ```
 
+To specify the simulator to be Verilator instead of the default of Icarus:
+```bash
+# Example clean and run tests with Verilator as the simulator
+make clean && make test_linear_layer SIM=verilator
+```
+NOTE: Verilator is necessary for viewing unpacked arrays in waveforms.
+
 Or run tests directly:
 
 ```bash
@@ -84,8 +91,8 @@ docker compose exec cocotb bash -c "make test_lif"
 
 Test results and waveforms are written to `results/`:
 - `results.xml` - JUnit-style test results
-- `sim_build/lif.fst` - LIF neuron waveform
-- `sim_build/linear_layer.fst` - Linear layer waveform
+- `sim_build/<module name>.fst` - Waveform file location when using Icarus
+- `dump.fst` - Waveform file location when using Verilator
 
 ### 5. Stop the Container
 
@@ -136,6 +143,7 @@ After running tests, view waveforms with GTKWave:
 gtkwave results/sim_build/lif.fst
 gtkwave results/sim_build/linear_layer.fst
 ```
+NOTE: Unpacked arrays will not be visible in waveforms generated using Icarus. It is necessary to use Verilator to view these signals.
 
 ## Troubleshooting
 

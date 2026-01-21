@@ -1,12 +1,13 @@
 # Makefile for running cocotb tests on SNN modules
 #
 # Usage:
-#   make                      # Run LIF tests (default)
-#   make test_lif             # Run LIF tests
-#   make test_linear_layer    # Run linear_layer tests
-#   make test_spike_buffer    # Run spike_buffer tests
-#   make test_membrane_buffer # Run membrane_buffer tests
-#   make clean                # Clean build artifacts
+#   make                             # Run LIF tests (default)
+#   make test_lif                    # Run LIF tests
+#   make test_linear_layer           # Run linear_layer tests
+#   make test_spike_buffer           # Run spike_buffer tests
+#   make test_membrane_buffer        # Run membrane_buffer tests
+#   make test_neuron_membrane_buffer # Run neuron_membrane_buffer tests
+#   make clean                       # Clean build artifacts
 
 # Default test module
 TEST ?= lif
@@ -44,6 +45,7 @@ endif
 SIM := icarus
 
 # Simulator-specific flags
+# Icarus and Verilator differ in their naming of parameter overrides
 ifeq ($(SIM),icarus)
     # Enable waveform tracing (FST format by default)
     WAVES = 1
@@ -67,6 +69,34 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pq_accumulator.NUM_ACTIONS=2 -Pq_accumulator.BATCH_SIZE=2
         COMPILE_ARGS += -Pq_accumulator.WEIGHTS_FILE=\"$(PWD)/weights/q_accum_weights.mem\"
         COMPILE_ARGS += -Pq_accumulator.BIAS_FILE=\"$(PWD)/weights/q_accum_bias.mem\"
+    endif
+endif
+
+# Verilator should be used when needing to trace unpacked arrays
+ifeq ($(SIM),verilator)
+    # Enable waveform tracing (VCD format)
+    WAVES = 1
+    EXTRA_ARGS += --trace --trace-fst
+    # Verilator uses -G for parameter overrides
+    ifeq ($(TEST),linear_layer)
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GNUM_OUTPUTS=4
+        COMPILE_ARGS += -GWEIGHTS_FILE=\"$(PWD)/weights/test_weights.mem\"
+        COMPILE_ARGS += -GBIAS_FILE=\"$(PWD)/weights/test_bias.mem\"
+    endif
+    ifeq ($(TEST),spike_buffer)
+        COMPILE_ARGS += -GNUM_NEURONS=8 -GNUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),membrane_buffer)
+        COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=3
+    endif
+    ifeq ($(TEST),neuron_membrane_buffer)
+        COMPILE_ARGS += -GNUM_TIMESTEPS=8
+    endif
+    ifeq ($(TEST),q_accumulator)
+        COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=4
+        COMPILE_ARGS += -GNUM_ACTIONS=2 -GBATCH_SIZE=2
+        COMPILE_ARGS += -GWEIGHTS_FILE=\"$(PWD)/weights/q_accum_weights.mem\"
+        COMPILE_ARGS += -GBIAS_FILE=\"$(PWD)/weights/q_accum_bias.mem\"
     endif
 endif
 
