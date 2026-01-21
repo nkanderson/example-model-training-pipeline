@@ -12,13 +12,13 @@ from cocotb.triggers import RisingEdge, ClockCycles
 
 # Fixed-point format constants
 TOTAL_BITS = 16  # Total bits in QS2.13 format
-FRAC_BITS = 13   # Fractional bits
+FRAC_BITS = 13  # Fractional bits
 
 # Derived constants
-SCALE_FACTOR = 2 ** FRAC_BITS           # 8192 for QS2.13
+SCALE_FACTOR = 2**FRAC_BITS  # 8192 for QS2.13
 MAX_SIGNED = 2 ** (TOTAL_BITS - 1) - 1  # 32767
-MIN_SIGNED = -(2 ** (TOTAL_BITS - 1))   # -32768
-UNSIGNED_RANGE = 2 ** TOTAL_BITS        # 65536
+MIN_SIGNED = -(2 ** (TOTAL_BITS - 1))  # -32768
+UNSIGNED_RANGE = 2**TOTAL_BITS  # 65536
 
 # Test configuration (must match Verilog parameters)
 NUM_INPUTS = 4
@@ -63,7 +63,7 @@ async def test_linear_layer_reset(dut):
     """Test that reset properly initializes the linear layer."""
 
     # Start clock (10ns period = 100MHz)
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     # Apply reset
@@ -93,7 +93,7 @@ async def test_linear_layer_identity_weights(dut):
     """
 
     # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -117,7 +117,9 @@ async def test_linear_layer_identity_weights(dut):
     outputs = []
     for i in range(NUM_OUTPUTS):
         assert dut.output_valid.value == 1, f"output_valid should be 1 for output {i}"
-        assert int(dut.output_idx.value) == i, f"output_idx should be {i}, got {int(dut.output_idx.value)}"
+        assert (
+            int(dut.output_idx.value) == i
+        ), f"output_idx should be {i}, got {int(dut.output_idx.value)}"
 
         output_val = int(dut.output_current.value)
         output_float = fixed_to_float(output_val)
@@ -132,8 +134,9 @@ async def test_linear_layer_identity_weights(dut):
     # Verify outputs match inputs (identity weights)
     for i in range(NUM_OUTPUTS):
         expected = test_inputs[i] if i < len(test_inputs) else 0.0
-        assert abs(outputs[i] - expected) < 0.01, \
-            f"Output {i}: expected {expected:.6f}, got {outputs[i]:.6f}"
+        assert (
+            abs(outputs[i] - expected) < 0.01
+        ), f"Output {i}: expected {expected:.6f}, got {outputs[i]:.6f}"
 
     dut._log.info("Identity weights test passed")
 
@@ -143,7 +146,7 @@ async def test_linear_layer_multiple_runs(dut):
     """Test that module can be started multiple times correctly."""
 
     # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -188,7 +191,7 @@ async def test_linear_layer_timing(dut):
     """Test that timing matches specification: NUM_OUTPUTS valid outputs."""
 
     # Start clock
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -210,15 +213,22 @@ async def test_linear_layer_timing(dut):
         cycle_count += 1
         if dut.output_valid.value == 1:
             valid_count += 1
-            dut._log.info(f"Cycle {cycle_count}: output_idx={int(dut.output_idx.value)}, valid={valid_count}")
+            dut._log.info(
+                f"Cycle {cycle_count}: output_idx={int(dut.output_idx.value)}, valid={valid_count}"
+            )
         if cycle_count > NUM_OUTPUTS + 5:
             assert False, f"Timeout: done not asserted after {cycle_count} cycles"
 
     # Should have exactly NUM_OUTPUTS valid outputs
-    assert valid_count == NUM_OUTPUTS, \
-        f"Expected {NUM_OUTPUTS} valid outputs, got {valid_count}"
+    assert (
+        valid_count == NUM_OUTPUTS
+    ), f"Expected {NUM_OUTPUTS} valid outputs, got {valid_count}"
 
     # done should be asserted with the last valid output
-    assert dut.output_valid.value == 1, "output_valid should still be 1 when done asserts"
+    assert (
+        dut.output_valid.value == 1
+    ), "output_valid should still be 1 when done asserts"
 
-    dut._log.info(f"Timing test passed: {valid_count} valid outputs in {cycle_count} cycles")
+    dut._log.info(
+        f"Timing test passed: {valid_count} valid outputs in {cycle_count} cycles"
+    )
