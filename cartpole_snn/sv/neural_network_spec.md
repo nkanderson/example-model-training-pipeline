@@ -6,6 +6,22 @@ This document specifies the hardware architecture for a Spiking Neural Network (
 
 This initial plan reflects training with snnTorch's Leaky neuron model. Small adjustments (e.g. changes to reset mechanism) may be necessary for usage with an alternative model.
 
+**Key Design Principle**: The hardware must exactly match the behavior of `snn_policy.py`'s forward pass:
+```python
+for _t in range(self.num_steps):
+    h1 = self.fc1(observations)  # same input every timestep for a single forward pass
+    spk1 = self.lif1(h1)         # LIF1 processes static h1, outputs spikes
+    h2 = self.fc2(spk1)          # new spike vector to LIF2 each timestep
+    spk2, mem2 = self.lif2(h2)   # LIF2 processes h2
+    q_t = self.fc_out(mem2)      # Q-values from membrane
+    out_accum += q_t             # Accumulate
+q_values = out_accum / num_steps
+```
+
+This means:
+- **Hidden Layer 1 LIFs** receive the **same current** every timestep
+- **Hidden Layer 2 LIFs** receive **different current each timestep** (varies with HL1 spike vectors)
+
 ## Network Architecture
 
 ### Default Layer Configuration
@@ -29,7 +45,58 @@ This initial plan reflects training with snnTorch's Leaky neuron model. Small ad
 
 ## Module Specifications
 
-### 1. `linear_layer` Module
+### 1. `neural_network` Module (Top-Level)
+
+**Purpose**: Top-level module that instantiates and coordinates all sub-modules to perform complete SNN inference. This is the interface for software interaction (cocotb tests, FPGA integration).
+
+**Interface**:
+```systemverilog
+module neural_network #(
+    // Network architecture
+    parameter NUM_INPUTS = 4,
+    parameter HL1_SIZE = 64,
+    parameter HL2_SIZE = 16,
+    parameter NUM_ACTIONS = 2,
+    parameter NUM_TIMESTEPS = 30,
+    // Fixed-point parameters
+    parameter DATA_WIDTH = 16,
+    parameter MEMBRANE_WIDTH = 24,
+    parameter FRAC_BITS = 13,
+    // LIF parameters, see lif.sv for details on format and interpretation of scaled values
+    parameter THRESHOLD = 8192,
+    parameter BETA = 115,
+    // Weight files
+    parameter FC1_WEIGHTS_FILE = "fc1_weights.mem",
+    parameter FC1_BIAS_FILE = "fc1_bias.mem",
+    parameter FC2_WEIGHTS_FILE = "fc2_weights.mem",
+    parameter FC2_BIAS_FILE = "fc2_bias.mem",
+    parameter FC_OUT_WEIGHTS_FILE = "fc_out_weights.mem",
+    parameter FC_OUT_BIAS_FILE = "fc_out_bias.mem",
+    // q_accumulator tuning
+    parameter Q_BATCH_SIZE = 4
+) (
+    input wire clk,
+    input wire reset,
+    input wire start,
+    input wire signed [DATA_WIDTH-1:0] observations [0:NUM_INPUTS-1],
+    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    output logic done
+);
+```
+
+**Behavior**:
+1. When `start` asserted, latch `observations` and begin inference
+2. Coordinate all sub-modules through the timestep loop
+3. Assert `done` when `q_values` are ready
+4. Hold `q_values` stable until next `start`
+
+**Internal Structure**:
+- Instantiates: `linear_layer` (×2), `lif` (×HL1_SIZE + HL2_SIZE), `spike_buffer`, `neuron_membrane_buffer` (×HL2_SIZE), `q_accumulator`
+- HL1 current registers: 64 × 16-bit registers to latch fc1 outputs for reuse each timestep
+- Central state machine manages timestep progression and inter-module coordination
+- q_accumulator runs pipelined with HL2 processing
+
+### 2. `linear_layer` Module
 
 **Purpose**: Implements a fully connected layer (equivalent to nn.Linear in PyTorch)
 
@@ -48,9 +115,9 @@ module linear_layer #(
     input wire start,                                    // Start computation
     input wire signed [DATA_WIDTH-1:0] inputs [0:NUM_INPUTS-1],
     output logic signed [DATA_WIDTH-1:0] output_current, // One current per cycle
-    output logic [IDX_WIDTH-1:0] output_idx,            // Which neuron (0 to NUM_OUTPUTS-1)
-    output logic output_valid,                          // Current output is valid
-    output logic done                                   // All outputs computed
+    output logic [$clog2(NUM_OUTPUTS)-1:0] output_idx,  // Which neuron (0 to NUM_OUTPUTS-1)
+    output logic output_valid,                           // Current output is valid
+    output logic done                                    // All outputs computed
 );
 ```
 
@@ -69,37 +136,40 @@ module linear_layer #(
 - Bias storage: NUM_OUTPUTS × 16 bits
 
 **Timing**:
-- Latency: NUM_OUTPUTS cycles
+- Latency: 1 + NUM_OUTPUTS cycles (1 cycle to latch, then NUM_OUTPUTS cycles of output)
 - Throughput: 1 output current per cycle (after first cycle)
 
-### 2. `lif` Module
+### 3. `lif` Module (Single-Step)
 
-**Purpose**: Leaky Integrate-and-Fire neuron with reset-by-subtraction
+**Purpose**: Leaky Integrate-and-Fire neuron with reset-by-subtraction. Processes one timestep per clock cycle with externally-managed timing.
 
 **Interface**:
 ```systemverilog
 module lif #(
-    parameter THRESHOLD = 8192,    // 1.0 in QS2.13
-    parameter BETA = 115           // 0.9 in Q1.7
+    parameter THRESHOLD = 8192,       // Spike threshold (1.0 in QS2.13)
+    parameter BETA = 115,             // Decay factor in Q1.7 format (115 ≈ 0.9)
+    parameter DATA_WIDTH = 16,
+    parameter MEMBRANE_WIDTH = 24
 ) (
     input wire clk,
     input wire reset,
-    input wire start,                        // Latch current and begin timesteps
-    input wire signed [15:0] current,        // Input current (QS2.13)
-    output logic spike_out,                  // Current timestep spike
-    output logic signed [23:0] membrane_out, // Current membrane potential
-    output logic [4:0] timestep,             // Current timestep (0-29)
-    output logic done                        // All timesteps complete
+    input wire clear,                                  // Clear membrane state for new inference
+    input wire enable,                                 // Process one timestep
+    input wire signed [DATA_WIDTH-1:0] current,       // Input current (QS2.13)
+    output logic spike_out,                            // Spike output this timestep
+    output logic signed [MEMBRANE_WIDTH-1:0] membrane_out  // Membrane potential after update
 );
 ```
 
 **Behavior**:
-1. When `start` asserted, latch `current` input
-2. Run for 30 timesteps internally:
-   - Each cycle: update membrane, check threshold, output spike
-   - `spike_out` valid each cycle with corresponding `timestep`
-3. Assert `done` after 30 timesteps
-4. Hold state until next `start`
+1. When `clear` asserted, reset membrane potential and spike history to zero
+2. When `enable` asserted (and not `clear`), compute one timestep:
+   - Apply decay: `decayed = (membrane × BETA) >> 7`
+   - Apply reset: `reset_sub = spike_prev ? THRESHOLD : 0`
+   - Update membrane: `membrane = decayed + current - reset_sub`
+   - Generate spike: `spike = (membrane >= THRESHOLD)`
+   - Store spike for next cycle's reset delay
+3. Outputs are registered (valid on next clock edge after `enable`)
 
 **State Update (per timestep)**:
 ```
@@ -107,6 +177,7 @@ decay_potential = (membrane_potential × BETA) >> 7
 reset_subtract = (spike_prev) ? THRESHOLD : 0
 membrane_potential = decay_potential + current - reset_subtract
 spike = (membrane_potential >= THRESHOLD)
+spike_prev = spike  // For next timestep's reset delay
 ```
 
 **Resource Usage**:
@@ -115,12 +186,15 @@ spike = (membrane_potential >= THRESHOLD)
 - 1-bit previous spike register
 
 **Timing**:
-- Internal: 30 cycles per inference
-- External: Triggered by `start`, signals completion with `done`
+- 1 cycle per timestep (externally driven by `enable`)
+- Combinational path: current → membrane calculation
+- Registered outputs: spike_out, membrane_out valid on next clock edge
 
-### 3. `spike_buffer` Module
+**Note**: For the legacy version with internal timestep management, see `lif_timestep.sv`.
 
-**Purpose**: Collect and synchronize spikes from all neurons in a layer
+### 4. `spike_buffer` Module
+
+**Purpose**: Store spike vectors from HL1 for each timestep. With synchronized HL1 processing, this becomes a simple register array.
 
 **Interface**:
 ```systemverilog
@@ -130,50 +204,28 @@ module spike_buffer #(
 ) (
     input wire clk,
     input wire reset,
-    input wire [NUM_NEURONS-1:0] neuron_done,   // Done signal from each neuron
-    input wire [NUM_NEURONS-1:0] spike_in,      // Current spike from each neuron
-    input wire [4:0] timestep,                  // Current timestep
-    output logic [NUM_NEURONS-1:0] spikes_out,  // Spike vector for current timestep
-    output logic timestep_ready                 // All neurons ready for this timestep
+    input wire clear,                              // Clear for new inference
+    input wire write_en,                           // Store current spike vector
+    input wire [$clog2(NUM_TIMESTEPS)-1:0] write_timestep,  // Which timestep to write
+    input wire [NUM_NEURONS-1:0] spike_in,         // Spike vector from all HL1 neurons
+    input wire [$clog2(NUM_TIMESTEPS)-1:0] read_timestep,   // Which timestep to read
+    output logic [NUM_NEURONS-1:0] spikes_out      // Spike vector for requested timestep
 );
 ```
 
 **Behavior**:
-1. Wait for all neurons to reach same timestep
-2. When `neuron_done[63]` asserts (last neuron starts timestep 0), begin synchronization
-3. Each cycle, collect spikes from all neurons at current timestep
-4. Assert `timestep_ready` when all neurons have completed current timestep
-5. Output synchronized spike vector
+1. On `clear`, reset all storage
+2. On `write_en`, store the 64-bit spike vector at `write_timestep`
+3. Combinational read: `spikes_out = storage[read_timestep]`
 
-### 4. `membrane_buffer` Module
+**Note**: Since all HL1 LIFs process synchronously (same timestep together), we get a complete 64-bit spike vector each cycle—no complex staggered timing logic needed.
 
-**Purpose**: Collect and synchronize membrane potentials from all neurons in final hidden layer
-
-**Interface**:
-```systemverilog
-module membrane_buffer #(
-    parameter NUM_NEURONS = 16,
-    parameter NUM_TIMESTEPS = 30,
-    parameter MEMBRANE_WIDTH = 24
-) (
-    input wire clk,
-    input wire reset,
-    input wire [NUM_NEURONS-1:0] neuron_done,              // Done signal from each neuron
-    input wire signed [MEMBRANE_WIDTH-1:0] membrane_in [0:NUM_NEURONS-1], // Membrane potentials
-    input wire [4:0] timestep,                             // Current timestep
-    output logic signed [MEMBRANE_WIDTH-1:0] membranes_out [0:NUM_NEURONS-1], // Membrane vector
-    output logic timestep_ready                            // All neurons ready for this timestep
-);
-```
-
-**Behavior**:
-1. Collect membrane potentials (not spikes) from final hidden layer neurons
-2. Synchronize across all neurons for each timestep
-3. Provide full membrane vector to output linear layer (fc_out)
+**Resource Usage**:
+- Storage: NUM_NEURONS × NUM_TIMESTEPS bits (e.g., 64 × 30 = 1,920 bits)
 
 ### 5. `neuron_membrane_buffer` Module
 
-**Purpose**: Per-neuron buffer storing membrane potentials across all timesteps (alternative to centralized membrane_buffer)
+**Purpose**: Per-neuron buffer storing membrane potentials across all timesteps
 
 **Interface**:
 ```systemverilog
@@ -183,13 +235,13 @@ module neuron_membrane_buffer #(
 ) (
     input wire clk,
     input wire reset,
-    input wire clear,                                    // Clear buffer for new inference
-    input wire write_en,                                 // Write enable
+    input wire clear,                                      // Clear buffer for new inference
+    input wire write_en,                                   // Write enable
     input wire [$clog2(NUM_TIMESTEPS)-1:0] write_timestep, // Which timestep to write
-    input wire signed [MEMBRANE_WIDTH-1:0] membrane_in,  // Membrane value to store
-    input wire [$clog2(NUM_TIMESTEPS)-1:0] read_timestep, // Which timestep to read
+    input wire signed [MEMBRANE_WIDTH-1:0] membrane_in,    // Membrane value to store
+    input wire [$clog2(NUM_TIMESTEPS)-1:0] read_timestep,  // Which timestep to read
     output logic signed [MEMBRANE_WIDTH-1:0] membrane_out, // Combinational read
-    output logic full                                    // All timesteps written
+    output logic full                                      // All timesteps written
 );
 ```
 
@@ -198,6 +250,7 @@ module neuron_membrane_buffer #(
 2. LIF writes membrane potential each timestep with `write_en` and `write_timestep`
 3. `q_accumulator` reads via shared `read_timestep` (broadcast to all buffers)
 4. Avoids fan-out issue of centralized buffer (no 384-wire bus to route)
+5. Combinational read for low latency
 
 **Resource Usage**:
 - Per instance: NUM_TIMESTEPS × MEMBRANE_WIDTH bits = 30 × 24 = 720 bits
@@ -249,132 +302,128 @@ module q_accumulator #(
 
 ## Pipelined Execution Flow
 
-### Critical Path Analysis
+The `neural_network` module coordinates all sub-modules to match snnTorch's forward pass exactly. The key insight is that **HL1 receives the same current each timestep** while **HL2 receives different current based on HL1's spikes**.
 
-The network processes data through sequential dependencies where each timestep of one layer must complete before the next layer can begin processing that timestep. The critical path determines overall latency.
+### Execution Strategy
 
-### Phase 1: Hidden Layer 1 - Load Currents (Cycles 0-63)
+The top-level state machine processes the network in phases:
 
-**Linear Layer 0 (fc1)**: Produces currents for 64 neurons
 ```
-Cycle 0:  linear_layer[0] outputs current[0] → LIF[0] latches and starts timestep 0
-Cycle 1:  linear_layer[0] outputs current[1] → LIF[1] latches and starts timestep 0
-          LIF[0] progresses to timestep 1
+IDLE → LOAD_HL1 → RUN_TIMESTEPS (with pipelined q_accumulator) → FINISH_Q → DONE
+```
+
+### Phase 1: Load Hidden Layer 1 Currents (Cycles 1-65)
+
+**fc1 (linear_layer)**: Computes currents for all 64 HL1 neurons from observations.
+
+```
+Cycle 1:  Start fc1 with observations
+Cycle 2:  fc1 outputs current[0] (output_valid=1), latch to hl1_current[0]
+Cycle 3:  fc1 outputs current[1], latch to hl1_current[1]
 ...
-Cycle 63: linear_layer[0] outputs current[63] → LIF[63] latches and starts timestep 0
-          LIF[0..62] are at various timesteps (0 started first, so is at timestep 63)
+Cycle 65: fc1 outputs current[63], latch to hl1_current[63], fc1.done=1
 ```
 
-**Note**: LIFs start their timestep sequence immediately upon receiving current. This creates a "wave" where earlier neurons are further ahead in timesteps.
+These currents are **latched** in registers (one per HL1 neuron) since they're reused every timestep.
 
-### Phase 2: Hidden Layer 1 - Complete Timesteps (Cycles 30-93)
+**Latency**: 65 cycles
 
-```
-Cycle 30: LIF[0] completes timestep 29 (last timestep) and asserts done
-          LIF[63] is at timestep 0 (hasn't completed any timestep yet)
-...
-Cycle 64: LIF[63] is at timestep 1
-...
-Cycle 93: LIF[63] completes timestep 29 (last timestep) and asserts done
-```
+### Phase 2: Run Timesteps Loop with Pipelined Q-Accumulation
 
-**spike_buffer[0]**: Collects spikes from all 64 neurons
-- At cycle 63: All neurons have completed timestep 0 → spike vector for timestep 0 is ready
-- At cycle 64: All neurons have completed timestep 1 → spike vector for timestep 1 is ready
-- ...
-- At cycle 92: All neurons have completed timestep 29 → spike vector for timestep 29 is ready
+For each of the 30 timesteps, HL1, fc2, HL2, and q_accumulator operate in a coordinated pipeline:
 
-### Phase 3: Hidden Layer 2 - Process All Timesteps (Cycles 63-542)
-
-For **each** of the 30 timesteps, linear_layer[1] must process the 64-bit spike vector:
-
-**Timestep 0** (Cycles 63-78):
-```
-Cycle 63: spike_buffer[0] provides 64 spikes from timestep 0
-          linear_layer[1] starts, outputs current[0] → LIF2[0] starts timestep 0
-Cycle 64: linear_layer[1] outputs current[1] → LIF2[1] starts timestep 0
-...
-Cycle 78: linear_layer[1] outputs current[15] → LIF2[15] starts timestep 0
-```
-
-**Timestep 1** (Cycles 79-94):
-```
-Cycle 79: spike_buffer[0] provides 64 spikes from timestep 1
-          linear_layer[1] outputs current[0] → LIF2[0] progresses to timestep 1
-...
-Cycle 94: linear_layer[1] outputs current[15] → LIF2[15] progresses to timestep 1
-```
-
-**Timestep 29** (Cycles 527-542):
-```
-Cycle 527: spike_buffer[0] provides 64 spikes from timestep 29 (last timestep)
-           linear_layer[1] outputs current[0] → LIF2[0] progresses to timestep 29
-...
-Cycle 542: linear_layer[1] outputs current[15] → LIF2[15] progresses to timestep 29
-```
-
-**Total cycles for Hidden Layer 2**: 30 timesteps × 16 cycles/timestep = 480 cycles (cycles 63-542)
-
-**Completion**:
-```
-Cycle 556: LIF2[0] completes timestep 29 (started at cycle 78, runs for 30 cycles)
-...
-Cycle 571: LIF2[15] completes timestep 29 (started at cycle 542, runs for 30 cycles)
-```
-
-### Phase 4: Output Layer - Q-Value Accumulation (Cycles 556-677)
-
-**Per-neuron membrane buffers**: Each of the 16 LIF neurons in hidden layer 2 writes to its own `neuron_membrane_buffer` as it computes each timestep. By cycle 571, all buffers are full.
-
-**q_accumulator**: Reads from all 16 buffers via shared `read_timestep`, processes in batches:
+**Timestep T processing (18 cycles per timestep)**:
 
 ```
-Cycle 572: q_accumulator starts, read_timestep = 0
-           Batch 0: neurons 0-3 × actions 0-1 (8 multiplications)
-Cycle 573: Batch 1: neurons 4-7 × actions 0-1
-Cycle 574: Batch 2: neurons 8-11 × actions 0-1
-Cycle 575: Batch 3: neurons 12-15 × actions 0-1, add biases
-           Q_accum[0] += Σ(w[0][n] × membrane[n][0]) + bias[0]
-           Q_accum[1] += Σ(w[1][n] × membrane[n][0]) + bias[1]
-           read_timestep = 1
-...
-Cycle 692: Last batch of timestep 29 complete
-Cycle 693: Divide Q_accum by NUM_TIMESTEPS
-Cycle 694: Saturate and output final Q-values, done = 1
+Cycle T×18 + 66:     HL1 Step
+                     - All 64 HL1 LIFs process in parallel (enable=1)
+                     - Input: latched hl1_current[63:0] (same every timestep)
+                     - Output: 64-bit spike vector
+                     - Store spike vector in spike_buffer at timestep T
+
+Cycle T×18 + 67:     Start fc2
+                     - fc2.start=1 with spike_buffer output for timestep T
+
+Cycles T×18 + 68-83: fc2 + HL2 Processing
+                     - fc2 outputs 16 currents sequentially
+                     - Each HL2 LIF processes as it receives its current
+                     - Each HL2 LIF writes membrane to neuron_membrane_buffer[T]
+
+Cycle T×18 + 83:     fc2.done=1, all HL2 neurons have processed timestep T
+                     - Membrane buffers now have data for timestep T
+                     - q_accumulator can process timestep T (pipelined)
 ```
 
-**Total cycles for q_accumulator**: 30 timesteps × 4 batches + 2 = 122 cycles
+**q_accumulator pipelining**:
+- q_accumulator starts processing timestep 0 as soon as all HL2 membrane values for timestep 0 are ready
+- Takes 4 cycles per timestep (4 batches of 4 neurons)
+- Since HL2 takes 17 cycles per timestep, q_accumulator easily keeps up
+- q_accumulator processes timestep T while HL2 works on timestep T+1
 
-### Phase 5: Action Selection (Cycle 695)
 ```
-Cycle 695: Compare Q_final[0] vs Q_final[1]
-           Output action = argmax(Q_final) → 0 (left) or 1 (right)
+Timeline (simplified):
+  Timestep 0: [HL1][----fc2+HL2----][q_acc T0]
+  Timestep 1:                      [HL1][----fc2+HL2----][q_acc T1]
+  Timestep 2:                                           [HL1][----fc2+HL2----][q_acc T2]
+  ...
 ```
 
-## Total Latency
+### Phase 3: Finish Q-Accumulation (Cycles ~606-609)
 
-**Critical path**:
-- **Hidden Layer 1 load**: 64 cycles (to get last neuron started)
-- **Hidden Layer 1 complete**: +29 cycles (for last neuron to finish all timesteps) = 93 cycles total
-- **Hidden Layer 2 process all timesteps**: 30 timesteps × 16 cycles = 480 cycles (cycles 63-542)
-- **Hidden Layer 2 complete**: +29 cycles (for last neuron to finish) = cycle 571
-- **q_accumulator**: 30 timesteps × 4 batches + 2 = 122 cycles (cycles 572-694)
-- **Action selection**: 1 cycle
+After timestep 29's HL2 completes, q_accumulator finishes processing timestep 29, then performs division and saturation.
 
-**Total**: **~695 cycles per inference**
+```
+Cycle ~606: q_accumulator processes last batch of timestep 29
+Cycle ~607: Division by NUM_TIMESTEPS
+Cycle ~608: Saturation and output
+Cycle ~609: q_accumulator.done=1
+```
 
-@ 100MHz = **~7µs per inference**
+### Phase 4: Done
+
+```
+Cycle ~610: neural_network.done=1, q_values stable
+```
+
+## Total Latency (Pipelined)
+
+| Phase | Cycles | Cumulative |
+|-------|--------|------------|
+| Load HL1 currents (fc1) | 65 | 65 |
+| Timestep loop (30 × 18) | 540 | 605 |
+| Finish q_accumulator | ~4 | ~609 |
+| **Total** | **~609** | |
+
+@ 100MHz = **~6.1µs per inference**
+
+Pipelining q_accumulator saves ~118 cycles compared to sequential execution (727 → 609 cycles, ~16% faster).
 
 **Note**: This is fast enough for real-time CartPole control (typical requirement < 20ms response time)
 
-**Latency tradeoffs for q_accumulator**:
-| BATCH_SIZE | Multipliers | Cycles | Total Latency |
-|------------|-------------|--------|---------------|
-| 1          | 2           | 482    | ~1050 cycles  |
-| 2          | 4           | 242    | ~815 cycles   |
-| 4 (default)| 8           | 122    | ~695 cycles   |
-| 8          | 16          | 62     | ~635 cycles   |
-| 16         | 32          | 32     | ~605 cycles   |
+### Timing Diagram (Pipelined)
+
+```
+Cycle:   1    65   66   83   84  101  ...  588  605  609
+         |-----|----|----|----|----|------|----|----|---|
+Phase:   [fc1  ][T0 ][T1 ][T2 ]...........[T29][q29][DIV]
+                 │    │    │              │
+                 └────┴────┴──q_acc───────┘ (pipelined)
+```
+
+### Latency Tradeoffs
+
+**q_accumulator BATCH_SIZE** (pipelined execution):
+| BATCH_SIZE | Multipliers | Cycles/Timestep | Can Pipeline? | Total Latency |
+|------------|-------------|-----------------|---------------|---------------|
+| 1          | 2           | 16              | Yes           | ~609 cycles   |
+| 2          | 4           | 8               | Yes           | ~609 cycles   |
+| 4 (default)| 8           | 4               | Yes           | ~609 cycles   |
+| 8          | 16          | 2               | Yes           | ~609 cycles   |
+| 16         | 32          | 1               | Yes           | ~609 cycles   |
+
+With pipelining, q_accumulator BATCH_SIZE doesn't significantly affect total latency (as long as it can keep up with HL2's 17 cycles/timestep).
+
+**Parallelizing fc2**: If fc2 outputs multiple currents per cycle, the timestep loop duration decreases proportionally, which would be the main lever for further latency reduction.
 
 ## Weight File Format
 
@@ -400,11 +449,23 @@ Weights exported from snn_policy.py must be formatted as:
 - **Structure**: One bias per neuron
 - **Encoding**: 16-bit hex, QS2.13 fixed-point
 
+### Weight File Configuration
+
+Weight file paths are parameterized in `neural_network` and passed down to sub-modules. This allows different trained models to be loaded without modifying RTL.
+
+For simulation, weight files can be specified via parameter overrides:
+```bash
+# cocotb/Makefile example
+COMPILE_ARGS += -Pneural_network.FC1_WEIGHTS_FILE=\"path/to/fc1_weights.mem\"
+```
+
+For synthesis, a configuration file or top-level wrapper can set the paths.
+
 ## Resource Estimates (64-16 Network)
 
 ### Linear Layers
-- **fc1**: 4 multipliers, 64×4×16 = 4096 bits weights, 64×16 = 1024 bits bias
-- **fc2**: 64 multipliers, 16×64×16 = 16384 bits weights, 16×16 = 256 bits bias
+- **fc1**: 4 multipliers, 64×4×16 = 4,096 bits weights, 64×16 = 1,024 bits bias
+- **fc2**: 64 multipliers, 16×64×16 = 16,384 bits weights, 16×16 = 256 bits bias
 
 ### q_accumulator (replaces fc_out linear layer)
 - **Multipliers**: BATCH_SIZE × NUM_ACTIONS = 8 (with BATCH_SIZE=4)
@@ -413,37 +474,133 @@ Weights exported from snn_policy.py must be formatted as:
 - **Accumulators**: 2 × 64-bit = 128 bits
 
 ### LIF Neurons
-- **Hidden Layer 1**: 64 instances × (1 multiplier + 24-bit membrane) = 64 multipliers, 1536 bits state
-- **Hidden Layer 2**: 16 instances × (1 multiplier + 24-bit membrane) = 16 multipliers, 384 bits state
+- **Hidden Layer 1**: 64 instances × (1 multiplier + 24-bit membrane + 1-bit spike_prev) = 64 multipliers, 1,600 bits state
+- **Hidden Layer 2**: 16 instances × (1 multiplier + 24-bit membrane + 1-bit spike_prev) = 16 multipliers, 400 bits state
+
+### HL1 Current Registers
+- **Purpose**: Store currents from fc1 for reuse across all timesteps
+- **Size**: 64 neurons × 16 bits = 1,024 bits
 
 ### Membrane Buffers
 - **neuron_membrane_buffer**: 16 instances × 30 timesteps × 24 bits = 11,520 bits (~1.4KB)
 
+### Spike Buffer
+- **spike_buffer**: 64 neurons × 30 timesteps = 1,920 bits
+- Simplified design: just a register array with write/read timestep addressing
+
 ### Total Resource Usage
-- **Multipliers**: 4 + 64 + 64 + 16 + 8 = 156
-- **Memory**: ~22KB for weights + ~3KB for buffers and state
+- **Multipliers**: 4 (fc1) + 64 (fc2) + 64 (HL1 LIF) + 16 (HL2 LIF) + 8 (q_accum) = **156 multipliers**
+- **Memory**: 
+  - Weights: ~22KB
+  - Buffers/State: ~2KB
+  - **Total**: ~24KB
 
-## Buffer Placement
+## Internal Architecture
 
-Three buffer types are required for synchronization:
+### Block Diagram
 
-1. **spike_buffer[0]**: Between Hidden Layer 1 LIF neurons and linear_layer[1]
-   - Collects 64 spikes per timestep
-   - Provides synchronized spike vectors to linear_layer[1]
+```
+                    observations[3:0]
+                          │
+                          ▼
+                    ┌──────────┐
+                    │   fc1    │ (linear_layer)
+                    │ 4→64     │
+                    └────┬─────┘
+                         │ currents[63:0] (latched)
+                         ▼
+              ┌──────────────────────┐
+              │   HL1 LIF Array      │ (64 × lif)
+              │   (same current      │
+              │    each timestep)    │
+              └──────────┬───────────┘
+                         │ spikes[63:0]
+                         ▼
+                    ┌──────────┐
+                    │   fc2    │ (linear_layer)
+                    │ 64→16    │ (re-run each timestep)
+                    └────┬─────┘
+                         │ currents[15:0]
+                         ▼
+              ┌──────────────────────┐
+              │   HL2 LIF Array      │ (16 × lif)
+              │   (new current       │
+              │    each timestep)    │
+              └──────────┬───────────┘
+                         │ membrane[15:0]
+                         ▼
+              ┌──────────────────────┐
+              │  Membrane Buffers    │ (16 × neuron_membrane_buffer)
+              └──────────┬───────────┘
+                         │
+                         ▼
+                  ┌────────────┐
+                  │q_accumulator│
+                  │  (fc_out)   │
+                  └──────┬─────┘
+                         │
+                         ▼
+                   q_values[1:0]
+```
 
-2. **neuron_membrane_buffer[0..15]**: One per LIF neuron in Hidden Layer 2
-   - Each stores 30 membrane potentials (24-bit each)
-   - LIF writes membrane each timestep; q_accumulator reads via shared `read_timestep`
-   - Avoids routing 384-wire bus from centralized buffer
+### State Machine
 
-3. **q_accumulator**: Replaces linear_layer[2] (fc_out) for output
-   - Reads from all 16 neuron_membrane_buffers
-   - Computes weighted sums, accumulates across timesteps, averages
-   - Outputs final Q-values directly
+```
+                     ┌──────┐
+         reset ──────│ IDLE │◄─────────────────────────┐
+                     └──┬───┘                          │
+                   start│                              │
+                        ▼                              │
+                  ┌──────────┐                         │
+                  │ LOAD_HL1 │ fc1 running             │
+                  └────┬─────┘                         │
+               fc1.done│                               │
+                       ▼                               │
+               ┌─────────────┐                         │
+          ┌────│RUN_TIMESTEPS│◄───┐                    │
+          │    └──────┬──────┘    │                    │
+          │           │           │                    │
+          │    ┌──────▼──────┐    │                    │
+          │    │  HL1_STEP   │    │  All 64 HL1 LIFs   │
+          │    │             │    │  process in        │
+          │    └──────┬──────┘    │  parallel          │
+          │           │           │                    │
+          │    ┌──────▼──────┐    │                    │
+          │    │  FC2_START  │    │                    │
+          │    └──────┬──────┘    │                    │
+          │           │           │                    │
+          │    ┌──────▼──────┐    │                    │
+          │    │ HL2_PROCESS │    │ timestep<29        │
+          │    │ (+q_acc     │    │                    │
+          │    │  pipelined) │    │                    │
+          │    └──────┬──────┘    │                    │
+          │   fc2.done│           │                    │
+          │           └───────────┘                    │
+          │ timestep==29                               │
+          │                                            │
+          ▼                                            │
+    ┌────────────┐                                     │
+    │ FINISH_Q   │ q_accumulator finishes T29 + div   │
+    └─────┬──────┘                                     │
+    q.done│                                            │
+          ▼                                            │
+       ┌──────┐                                        │
+       │ DONE │────────────────────────────────────────┘
+       └──────┘
+```
+
+**Key changes from non-pipelined design**:
+1. `HL1_STEP` processes all 64 neurons in parallel (synchronized)
+2. `HL2_PROCESS` includes pipelined q_accumulator processing of the previous timestep
+3. `FINISH_Q` replaces `Q_ACCUMULATE`—only needs to finish the last timestep's processing
 
 ## Software Integration
 
-For hardware-in-the-loop evaluation, an alternative SNNPolicy class will be needed:
+The `neural_network` module is designed to be the top-level interface for software interaction. It can be driven by:
+1. **cocotb tests**: For functional verification using gymnasium environments
+2. **FPGA integration**: For hardware-in-the-loop evaluation
+
+**Note**: Action selection (`argmax(q_values)`) is performed in software, not hardware. This keeps the hardware focused on the computationally intensive forward pass.
 
 ### Hardware-Accelerated Policy Class
 
@@ -500,6 +657,48 @@ class SNNPolicyHardware(nn.Module):
         return values.astype(np.float32) / 8192.0
 ```
 
+### cocotb Test Example
+
+```python
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, ClockCycles
+
+@cocotb.test()
+async def test_inference(dut):
+    """Test a single inference through the neural network."""
+    clock = Clock(dut.clk, 10, units="ns")  # 100 MHz
+    cocotb.start_soon(clock.start())
+    
+    # Reset
+    dut.reset.value = 1
+    await ClockCycles(dut.clk, 5)
+    dut.reset.value = 0
+    await RisingEdge(dut.clk)
+    
+    # Load observations (example CartPole state)
+    observations = [0.01, -0.02, 0.03, 0.04]  # Example values
+    for i, obs in enumerate(observations):
+        dut.observations[i].value = float_to_fixed(obs)
+    
+    # Start inference
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+    
+    # Wait for done
+    while dut.done.value == 0:
+        await RisingEdge(dut.clk)
+    
+    # Read Q-values
+    q0 = fixed_to_float(dut.q_values[0].value.signed_integer)
+    q1 = fixed_to_float(dut.q_values[1].value.signed_integer)
+    
+    # Action selection in software
+    action = 0 if q0 > q1 else 1
+    print(f"Q-values: [{q0:.4f}, {q1:.4f}], Action: {action}")
+```
+
 ### Usage in Evaluation
 
 ```python
@@ -519,7 +718,7 @@ for episode in range(num_episodes):
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             q_values = policy_hw(state_tensor)  # Hardware forward pass
-        action = q_values.argmax().item()
+        action = q_values.argmax().item()  # Action selection in software
         state, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
 ```
@@ -540,12 +739,18 @@ Compare hardware vs. software inference:
 
 ## Notes and Future Enhancements
 
-1. **Fractional-Order Neurons**: If using fractional-order LIF neurons, each instance requires additional DSP resources for the Grünwald-Letnikov approximation
+1. **LIF Module Variants**:
+   - `lif.sv`: Single-step LIF with external timestep management (used in `neural_network`)
+   - `lif_timestep.sv`: Legacy LIF with internal timestep loop (preserved for reference/testing)
 
-2. **Time-Multiplexing**: Current design can be upgraded to process N neurons in parallel per cycle by adding N parallel accumulators to linear_layer and processing N LIF instances simultaneously. This would reduce latency proportionally (e.g., processing 4 neurons in parallel reduces Hidden Layer 2 from 480 cycles to 120 cycles).
+2. **Fractional-Order Neurons**: If using fractional-order LIF neurons, each instance requires additional DSP resources for the Grünwald-Letnikov approximation
 
-3. **Reduced Precision**: Consider 8-bit or mixed-precision to reduce resource usage if accuracy permits
+3. **Time-Multiplexing**: Current design uses parallel LIF arrays. For reduced resource usage, neurons could be time-multiplexed (e.g., 4 LIF instances processing 16 neurons over 4 cycles each).
 
-4. **Dynamic Timesteps**: Add early stopping mechanism if Q-values converge before 30 timesteps
+4. **Reduced Precision**: Consider 8-bit or mixed-precision to reduce resource usage if accuracy permits
 
-5. **Membrane Potential Precision**: The output layer uses 24-bit membrane potentials but could potentially use reduced precision (16-bit) if testing shows acceptable accuracy
+5. **Dynamic Timesteps**: Add early stopping mechanism if Q-values converge before 30 timesteps
+
+6. **Membrane Potential Precision**: The output layer uses 24-bit membrane potentials but could potentially use reduced precision (16-bit) if testing shows acceptable accuracy
+
+7. **fc2 Parallelization**: Processing multiple HL2 currents per cycle would reduce the timestep loop duration significantly

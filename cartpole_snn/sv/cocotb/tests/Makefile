@@ -2,7 +2,8 @@
 #
 # Usage:
 #   make                             # Run LIF tests (default)
-#   make test_lif                    # Run LIF tests
+#   make test_lif                    # Run LIF (single-step) tests
+#   make test_lif_timestep           # Run LIF with internal timestep loop tests
 #   make test_linear_layer           # Run linear_layer tests
 #   make test_spike_buffer           # Run spike_buffer tests
 #   make test_membrane_buffer        # Run membrane_buffer tests
@@ -17,6 +18,10 @@ ifeq ($(TEST),lif)
     VERILOG_SOURCES = $(PWD)/../sv/lif.sv
     TOPLEVEL = lif
     MODULE = test_lif
+else ifeq ($(TEST),lif_timestep)
+    VERILOG_SOURCES = $(PWD)/../sv/lif_timestep.sv
+    TOPLEVEL = lif_timestep
+    MODULE = test_lif_timestep
 else ifeq ($(TEST),linear_layer)
     VERILOG_SOURCES = $(PWD)/../sv/linear_layer.sv
     TOPLEVEL = linear_layer
@@ -38,7 +43,7 @@ else ifeq ($(TEST),q_accumulator)
     TOPLEVEL = q_accumulator
     MODULE = test_q_accumulator
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'linear_layer', 'spike_buffer', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -114,6 +119,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 test_lif:
 	$(MAKE) TEST=lif
 
+test_lif_timestep:
+	$(MAKE) TEST=lif_timestep
+
 test_linear_layer:
 	$(MAKE) TEST=linear_layer
 
@@ -135,4 +143,4 @@ clean::
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_linear_layer test_spike_buffer test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
+.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
