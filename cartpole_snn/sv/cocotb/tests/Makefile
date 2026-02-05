@@ -6,6 +6,7 @@
 #   make test_lif_timestep           # Run LIF with internal timestep loop tests
 #   make test_linear_layer           # Run linear_layer tests
 #   make test_spike_buffer           # Run spike_buffer tests
+#   make test_spike_buffer_staggered # Run spike_buffer_staggered tests (legacy)
 #   make test_membrane_buffer        # Run membrane_buffer tests
 #   make test_neuron_membrane_buffer # Run neuron_membrane_buffer tests
 #   make clean                       # Clean build artifacts
@@ -30,6 +31,10 @@ else ifeq ($(TEST),spike_buffer)
     VERILOG_SOURCES = $(PWD)/../sv/spike_buffer.sv
     TOPLEVEL = spike_buffer
     MODULE = test_spike_buffer
+else ifeq ($(TEST),spike_buffer_staggered)
+    VERILOG_SOURCES = $(PWD)/../sv/spike_buffer_staggered.sv
+    TOPLEVEL = spike_buffer_staggered
+    MODULE = test_spike_buffer_staggered
 else ifeq ($(TEST),membrane_buffer)
     VERILOG_SOURCES = $(PWD)/../sv/membrane_buffer.sv
     TOPLEVEL = membrane_buffer
@@ -43,7 +48,7 @@ else ifeq ($(TEST),q_accumulator)
     TOPLEVEL = q_accumulator
     MODULE = test_q_accumulator
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -62,6 +67,9 @@ ifeq ($(SIM),icarus)
     endif
     ifeq ($(TEST),spike_buffer)
         COMPILE_ARGS += -Pspike_buffer.NUM_NEURONS=8 -Pspike_buffer.NUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),spike_buffer_staggered)
+        COMPILE_ARGS += -Pspike_buffer_staggered.NUM_NEURONS=8 -Pspike_buffer_staggered.NUM_TIMESTEPS=4
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
@@ -89,6 +97,9 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GBIAS_FILE=\"$(PWD)/weights/test_bias.mem\"
     endif
     ifeq ($(TEST),spike_buffer)
+        COMPILE_ARGS += -GNUM_NEURONS=8 -GNUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),spike_buffer_staggered)
         COMPILE_ARGS += -GNUM_NEURONS=8 -GNUM_TIMESTEPS=4
     endif
     ifeq ($(TEST),membrane_buffer)
@@ -128,6 +139,9 @@ test_linear_layer:
 test_spike_buffer:
 	$(MAKE) TEST=spike_buffer
 
+test_spike_buffer_staggered:
+	$(MAKE) TEST=spike_buffer_staggered
+
 test_membrane_buffer:
 	$(MAKE) TEST=membrane_buffer
 
@@ -143,4 +157,4 @@ clean::
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
+.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
