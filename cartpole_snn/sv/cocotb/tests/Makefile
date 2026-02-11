@@ -47,8 +47,17 @@ else ifeq ($(TEST),q_accumulator)
     VERILOG_SOURCES = $(PWD)/../sv/q_accumulator.sv
     TOPLEVEL = q_accumulator
     MODULE = test_q_accumulator
+else ifeq ($(TEST),neural_network)
+    VERILOG_SOURCES = $(PWD)/../sv/neural_network.sv \
+                      $(PWD)/../sv/linear_layer.sv \
+                      $(PWD)/../sv/lif.sv \
+                      $(PWD)/../sv/spike_buffer.sv \
+                      $(PWD)/../sv/neuron_membrane_buffer.sv \
+                      $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = neural_network
+    MODULE = test_neural_network
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', or 'q_accumulator')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', or 'neural_network')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -83,6 +92,17 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pq_accumulator.WEIGHTS_FILE=\"$(PWD)/weights/q_accum_weights.mem\"
         COMPILE_ARGS += -Pq_accumulator.BIAS_FILE=\"$(PWD)/weights/q_accum_bias.mem\"
     endif
+    ifeq ($(TEST),neural_network)
+        COMPILE_ARGS += -Pneural_network.NUM_INPUTS=4 -Pneural_network.HL1_SIZE=8
+        COMPILE_ARGS += -Pneural_network.HL2_SIZE=4 -Pneural_network.NUM_ACTIONS=2
+        COMPILE_ARGS += -Pneural_network.NUM_TIMESTEPS=4 -Pneural_network.Q_BATCH_SIZE=2
+        COMPILE_ARGS += -Pneural_network.FC1_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc1_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC1_BIAS_FILE=\"$(PWD)/weights/nn_fc1_bias.mem\"
+        COMPILE_ARGS += -Pneural_network.FC2_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc2_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC2_BIAS_FILE=\"$(PWD)/weights/nn_fc2_bias.mem\"
+        COMPILE_ARGS += -Pneural_network.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc_out_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC_OUT_BIAS_FILE=\"$(PWD)/weights/nn_fc_out_bias.mem\"
+    endif
 endif
 
 # Verilator should be used when needing to trace unpacked arrays
@@ -113,6 +133,17 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GNUM_ACTIONS=2 -GBATCH_SIZE=2
         COMPILE_ARGS += -GWEIGHTS_FILE=\"$(PWD)/weights/q_accum_weights.mem\"
         COMPILE_ARGS += -GBIAS_FILE=\"$(PWD)/weights/q_accum_bias.mem\"
+    endif
+    ifeq ($(TEST),neural_network)
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=8
+        COMPILE_ARGS += -GHL2_SIZE=4 -GNUM_ACTIONS=2
+        COMPILE_ARGS += -GNUM_TIMESTEPS=4 -GQ_BATCH_SIZE=2
+        COMPILE_ARGS += -GFC1_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc1_weights.mem\"
+        COMPILE_ARGS += -GFC1_BIAS_FILE=\"$(PWD)/weights/nn_fc1_bias.mem\"
+        COMPILE_ARGS += -GFC2_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc2_weights.mem\"
+        COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/nn_fc2_bias.mem\"
+        COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc_out_weights.mem\"
+        COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/nn_fc_out_bias.mem\"
     endif
 endif
 
@@ -151,10 +182,13 @@ test_neuron_membrane_buffer:
 test_q_accumulator:
 	$(MAKE) TEST=q_accumulator
 
+test_neural_network:
+	$(MAKE) TEST=neural_network
+
 # Clean up generated files
 clean::
 	rm -rf $(RESULTS_DIR)/*
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator
+.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network
