@@ -474,9 +474,23 @@ class Weights:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Export each parameter to separate .mem file
+        # Map layer names to expected hardware filenames
+        layer_name_map = {
+            "fc1.weight": "fc1_weights",
+            "fc1.bias": "fc1_bias",
+            "fc2.weight": "fc2_weights",
+            "fc2.bias": "fc2_bias",
+            "fc_out.weight": "fc_out_weights",
+            "fc_out.bias": "fc_out_bias",
+        }
+
         for name, int_weights in quantized_ints.items():
-            # Clean parameter name for filename
-            filename = name.replace(".", "_") + ".mem"
+            # Skip LIF parameters (threshold, beta, etc.) - they're not used in hardware export
+            if name not in layer_name_map:
+                continue
+
+            # Use mapped filename for hardware compatibility
+            filename = layer_name_map[name] + ".mem"
             filepath = output_dir / filename
 
             # Flatten weights for sequential memory layout
@@ -511,12 +525,15 @@ class Weights:
 
                 # Write hex values (one per line for $readmemh)
                 for i, val in enumerate(flat_weights):
+                    # Convert numpy type to Python int to avoid overflow issues with bitwise ops
+                    val_int = int(val)
+
                     # Convert to unsigned representation for hex output
-                    if signed and val < 0:
+                    if signed and val_int < 0:
                         # Two's complement
-                        hex_val = val & mask
+                        hex_val = val_int & mask
                     else:
-                        hex_val = int(val) & mask
+                        hex_val = val_int & mask
 
                     # Convert to float for comment
                     float_val = float(val) / config["scale_factor"]
