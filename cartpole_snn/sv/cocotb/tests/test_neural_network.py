@@ -148,8 +148,8 @@ async def test_neural_network_completes(dut):
 
 
 @cocotb.test()
-async def test_neural_network_q_values_valid(dut):
-    """Test that Q-values are valid after inference completes."""
+async def test_neural_network_selected_action_valid(dut):
+    """Test that selected_action is valid after inference completes."""
 
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
@@ -170,15 +170,15 @@ async def test_neural_network_q_values_valid(dut):
     completed = await wait_for_done(dut)
     assert completed, "Inference should complete"
 
-    # Read Q-values (they should be valid numbers, not X)
-    q0 = int(dut.q_values[0].value)
-    q1 = int(dut.q_values[1].value)
+    # Read selected_action (should be 0 or 1, not X)
+    action = int(dut.selected_action.value)
 
-    dut._log.info(f"Q-values: [{fixed_to_float(q0):.4f}, {fixed_to_float(q1):.4f}]")
+    dut._log.info(f"selected_action: {action}")
+    assert action in [0, 1], f"Invalid action: {action}"
 
-    # Just verify they're valid (not checking accuracy)
-    # The values will depend on the test weights
-    dut._log.info("Q-values valid test passed")
+    # Just verify it's valid (not checking accuracy)
+    # The value will depend on the test weights
+    dut._log.info("Selected action valid test passed")
 
 
 @cocotb.test()
@@ -207,10 +207,9 @@ async def test_neural_network_back_to_back(dut):
         completed = await wait_for_done(dut)
         assert completed, f"Inference {inference_num} should complete"
 
-        # Read Q-values
-        q0 = fixed_to_float(int(dut.q_values[0].value))
-        q1 = fixed_to_float(int(dut.q_values[1].value))
-        dut._log.info(f"Inference {inference_num} Q-values: [{q0:.4f}, {q1:.4f}]")
+        # Read selected action
+        action = int(dut.selected_action.value)
+        dut._log.info(f"Inference {inference_num} selected_action: {action}")
 
         # For back-to-back, start can be asserted while done is still high
         # (DONE_STATE handles this)
@@ -268,9 +267,8 @@ async def test_neural_network_zero_input(dut):
     completed = await wait_for_done(dut)
     assert completed, "Inference with zero input should complete"
 
-    q0 = fixed_to_float(int(dut.q_values[0].value))
-    q1 = fixed_to_float(int(dut.q_values[1].value))
-    dut._log.info(f"Zero input Q-values: [{q0:.4f}, {q1:.4f}]")
+    action = int(dut.selected_action.value)
+    dut._log.info(f"Zero input selected_action: {action}")
 
     dut._log.info("Zero input test passed")
 
@@ -297,9 +295,8 @@ async def test_neural_network_large_input(dut):
     completed = await wait_for_done(dut)
     assert completed, "Inference with large input should complete"
 
-    q0 = fixed_to_float(int(dut.q_values[0].value))
-    q1 = fixed_to_float(int(dut.q_values[1].value))
-    dut._log.info(f"Large input Q-values: [{q0:.4f}, {q1:.4f}]")
+    action = int(dut.selected_action.value)
+    dut._log.info(f"Large input selected_action: {action}")
 
     dut._log.info("Large input test passed")
 

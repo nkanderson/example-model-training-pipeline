@@ -44,8 +44,11 @@ module q_accumulator #(
     // to BATCH_SIZE at a time if synthesis struggles with this size.
     input wire signed [MEMBRANE_WIDTH-1:0] membrane_in [0:NUM_NEURONS-1], // From all buffers
 
-    // Output Q-values
-    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    // Action selection from full-precision Q-values, computed at internal accumulator width
+    // Q-values are not output because they routinely exceed the DATA_WIDTH (QS2.13) range
+    // and would saturate, losing the distinction between actions. The full-precision
+    // comparison that produces selected_action is the authoritative result.
+    output logic [$clog2(NUM_ACTIONS)-1:0] selected_action,
     output logic done
 );
 
@@ -97,10 +100,6 @@ module q_accumulator #(
     // Division result
     logic signed [ACCUM_WIDTH-1:0] q_divided [0:NUM_ACTIONS-1];
 
-    // Saturation bounds
-    localparam signed [DATA_WIDTH-1:0] MAX_VAL = {1'b0, {(DATA_WIDTH-1){1'b1}}};
-    localparam signed [DATA_WIDTH-1:0] MIN_VAL = {1'b1, {(DATA_WIDTH-1){1'b0}}};
-
     // Output read_timestep to buffers
     assign read_timestep = timestep_counter;
 
@@ -126,9 +125,9 @@ module q_accumulator #(
             timestep_counter <= '0;
             batch_counter <= '0;
             done <= 1'b0;
+            selected_action <= '0;
             for (int a = 0; a < NUM_ACTIONS; a++) begin
                 q_accum[a] <= '0;
-                q_values[a] <= '0;
                 q_divided[a] <= '0;
             end
         end else begin
@@ -188,16 +187,10 @@ module q_accumulator #(
                 end
 
                 DONE_STATE: begin
-                    // Saturate and output final Q-values
-                    for (int a = 0; a < NUM_ACTIONS; a++) begin
-                        if (q_divided[a] > $signed({{(ACCUM_WIDTH-DATA_WIDTH){1'b0}}, MAX_VAL})) begin
-                            q_values[a] <= MAX_VAL;
-                        end else if (q_divided[a] < $signed({{(ACCUM_WIDTH-DATA_WIDTH){1'b1}}, MIN_VAL})) begin
-                            q_values[a] <= MIN_VAL;
-                        end else begin
-                            q_values[a] <= q_divided[a][DATA_WIDTH-1:0];
-                        end
-                    end
+                    // Select action from full-precision Q-values
+                    // The comparison uses the full ACCUM_WIDTH bits, preserving
+                    // distinctions that would be lost if we saturated to DATA_WIDTH
+                    selected_action <= (q_divided[0] >= q_divided[1]) ? 1'b0 : 1'b1;
                     done <= 1'b1;
 
                     // Return to processing on next start, else idle

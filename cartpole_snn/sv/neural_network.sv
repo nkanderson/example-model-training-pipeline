@@ -52,7 +52,10 @@ module neural_network #(
     input wire reset,
     input wire start,
     input wire signed [DATA_WIDTH-1:0] observations [0:NUM_INPUTS-1],
-    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    // Action selected from full-precision Q-values inside q_accumulator
+    // Q-values are not output because they routinely exceed QS2.13 range and saturate,
+    // losing the distinction between actions. selected_action is the authoritative result.
+    output logic [$clog2(NUM_ACTIONS)-1:0] selected_action,
     output logic done
 );
 
@@ -311,7 +314,7 @@ module neural_network #(
     // q_accumulator
     // =========================================================================
     logic q_start;
-    logic signed [DATA_WIDTH-1:0] q_values_internal [0:NUM_ACTIONS-1];
+    logic [$clog2(NUM_ACTIONS)-1:0] q_selected_action;
     logic q_done;
 
     q_accumulator #(
@@ -330,7 +333,7 @@ module neural_network #(
         .start(q_start),
         .read_timestep(q_read_timestep),
         .membrane_in(membrane_to_q),
-        .q_values(q_values_internal),
+        .selected_action(q_selected_action),
         .done(q_done)
     );
 
@@ -339,13 +342,9 @@ module neural_network #(
     // =========================================================================
     always_ff @(posedge clk or posedge reset) begin
         if (reset) begin
-            for (int i = 0; i < NUM_ACTIONS; i++) begin
-                q_values[i] <= '0;
-            end
+            selected_action <= '0;
         end else if (q_done) begin
-            for (int i = 0; i < NUM_ACTIONS; i++) begin
-                q_values[i] <= q_values_internal[i];
-            end
+            selected_action <= q_selected_action;
         end
     end
 

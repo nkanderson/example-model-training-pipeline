@@ -79,7 +79,7 @@ module neural_network #(
     input wire reset,
     input wire start,
     input wire signed [DATA_WIDTH-1:0] observations [0:NUM_INPUTS-1],
-    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    output logic selected_action,
     output logic done
 );
 ```
@@ -87,8 +87,8 @@ module neural_network #(
 **Behavior**:
 1. When `start` asserted, latch `observations` and begin inference
 2. Coordinate all sub-modules through the timestep loop
-3. Assert `done` when `q_values` are ready
-4. Hold `q_values` stable until next `start`
+3. Assert `done` when `selected_action` is ready
+4. Hold `selected_action` stable until next `start`
 
 **Internal Structure**:
 - Instantiates: `linear_layer` (×2), `lif` (×HL1_SIZE + HL2_SIZE), `spike_buffer`, `neuron_membrane_buffer` (×HL2_SIZE), `q_accumulator`
@@ -278,7 +278,7 @@ module q_accumulator #(
     input wire start,
     output logic [$clog2(NUM_TIMESTEPS)-1:0] read_timestep, // Shared to all buffers
     input wire signed [MEMBRANE_WIDTH-1:0] membrane_in [0:NUM_NEURONS-1],
-    output logic signed [DATA_WIDTH-1:0] q_values [0:NUM_ACTIONS-1],
+    output logic selected_action,
     output logic done
 );
 ```
@@ -287,8 +287,11 @@ module q_accumulator #(
 1. When `start` asserted, begin reading from all neuron membrane buffers
 2. Process BATCH_SIZE neurons per cycle (parallel multipliers)
 3. Accumulate: `Q[a] += Σ(w[a][n] × membrane[n][t]) + bias[a]` for each timestep
-4. After all timesteps, divide by NUM_TIMESTEPS and saturate
-5. Assert `done` when `q_values` are ready
+4. After all timesteps, divide by NUM_TIMESTEPS
+5. Select action from full-precision divided Q-values: `selected_action = (Q[0] >= Q[1]) ? 0 : 1`
+6. Assert `done` when `selected_action` is ready
+
+**Note**: Q-values are not output because they routinely exceed the QS2.13 range (±4.0) and would saturate, losing the distinction between actions. The argmax is computed internally at full accumulator precision (~51 bits) where the values remain distinguishable.
 
 **Resource Usage**:
 - Multipliers: BATCH_SIZE × NUM_ACTIONS (e.g., 4 × 2 = 8 multipliers)
@@ -540,7 +543,7 @@ For synthesis, a configuration file or top-level wrapper can set the paths.
                   └──────┬─────┘
                          │
                          ▼
-                   q_values[1:0]
+                  selected_action
 ```
 
 ### State Machine
@@ -600,7 +603,7 @@ The `neural_network` module is designed to be the top-level interface for softwa
 1. **cocotb tests**: For functional verification using gymnasium environments
 2. **FPGA integration**: For hardware-in-the-loop evaluation
 
-**Note**: Action selection (`argmax(q_values)`) is performed in software, not hardware. This keeps the hardware focused on the computationally intensive forward pass.
+**Note**: Action selection (`argmax(q_values)`) is performed **inside the hardware** (`q_accumulator`), not in software. This is necessary because the internal Q-values exceed the QS2.13 output range and would saturate to identical values, making a software argmax unreliable. The hardware computes the argmax at full internal precision (~51 bits).
 
 ### Hardware-Accelerated Policy Class
 
@@ -625,10 +628,10 @@ class SNNPolicyHardware(nn.Module):
             observations: [batch, 4] tensor of CartPole observations
 
         Returns:
-            q_values: [batch, 2] tensor of Q-values
+            actions: [batch] tensor of selected actions (0 or 1)
         """
         batch_size = observations.size(0)
-        q_values = torch.zeros(batch_size, self.n_actions)
+        actions = torch.zeros(batch_size, dtype=torch.long)
 
         # Process each sample in batch (hardware processes one at a time)
         for i in range(batch_size):
@@ -639,14 +642,11 @@ class SNNPolicyHardware(nn.Module):
             self.fpga.write_inputs(obs_fixed)
             self.fpga.start_inference()
 
-            # Wait for completion and read Q-values
+            # Wait for completion and read selected action
             self.fpga.wait_done()
-            q_fixed = self.fpga.read_qvalues()
+            actions[i] = self.fpga.read_selected_action()
 
-            # Convert back to float
-            q_values[i] = torch.from_numpy(self.qs2_13_to_float(q_fixed))
-
-        return q_values
+        return actions
 
     def float_to_qs2_13(self, values):
         """Convert float array to QS2.13 fixed-point."""
@@ -690,13 +690,9 @@ async def test_inference(dut):
     while dut.done.value == 0:
         await RisingEdge(dut.clk)
     
-    # Read Q-values
-    q0 = fixed_to_float(dut.q_values[0].value.signed_integer)
-    q1 = fixed_to_float(dut.q_values[1].value.signed_integer)
-    
-    # Action selection in software
-    action = 0 if q0 > q1 else 1
-    print(f"Q-values: [{q0:.4f}, {q1:.4f}], Action: {action}")
+    # Read selected action
+    action = int(dut.selected_action.value)
+    print(f"Selected action: {action}")
 ```
 
 ### Usage in Evaluation
@@ -717,8 +713,8 @@ for episode in range(num_episodes):
     while not done:
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
-            q_values = policy_hw(state_tensor)  # Hardware forward pass
-        action = q_values.argmax().item()  # Action selection in software
+            actions = policy_hw(state_tensor)  # Hardware forward pass
+        action = actions[0].item()  # Action selected in hardware
         state, reward, terminated, truncated, _ = env.step(action)
         done = terminated or truncated
 ```
@@ -726,7 +722,7 @@ for episode in range(num_episodes):
 ### Performance Validation
 
 Compare hardware vs. software inference:
-- Accuracy: Q-values should match within quantization error (~0.0001)
+- Accuracy: Selected action should match software argmax for all test cases
 - Latency: Hardware should be 6.17µs vs. software ~100µs (on CPU)
 - Throughput: Measure frames per second in CartPole environment
 
@@ -734,7 +730,7 @@ Compare hardware vs. software inference:
 
 1. **Unit tests**: Verify fixed-point conversion accuracy
 2. **Layer-by-layer tests**: Compare hardware vs. software outputs after each layer
-3. **End-to-end tests**: Compare final Q-values and action selection
+3. **End-to-end tests**: Compare selected action vs. software argmax
 4. **Episode tests**: Run full CartPole episodes, compare episode length distributions
 
 ## Notes and Future Enhancements

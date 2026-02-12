@@ -6,6 +6,11 @@ The q_accumulator computes Q-values by:
 2. Computing weighted sums (like a linear layer)
 3. Accumulating across all timesteps
 4. Averaging to produce final Q-values
+5. Selecting the action with the highest Q-value at full internal precision
+
+The module outputs selected_action (argmax) rather than Q-values, because the
+Q-values routinely exceed the DATA_WIDTH (QS2.13) range and would saturate,
+losing the distinction between actions.
 
 Uses batched processing: BATCH_SIZE neurons processed per cycle.
 Total multipliers: BATCH_SIZE × NUM_ACTIONS
@@ -135,12 +140,10 @@ async def test_q_accumulator_zero_membranes(dut):
 
     assert dut.done.value == 1, f"done not asserted after {max_cycles} cycles"
 
-    # With zero membranes, Q-values should equal biases
-    # (accumulated bias × NUM_TIMESTEPS, then divided by NUM_TIMESTEPS = bias)
-    # TODO: Read biases directly from test .mem file and assert against output q_values
-    # instead of just logging for manual verification.
-    dut._log.info(f"Q[0] = {to_signed(int(dut.q_values[0].value), DATA_WIDTH)}")
-    dut._log.info(f"Q[1] = {to_signed(int(dut.q_values[1].value), DATA_WIDTH)}")
+    # With zero membranes, Q-values equal biases. selected_action reflects
+    # which bias is larger.
+    action = int(dut.selected_action.value)
+    dut._log.info(f"selected_action = {action}")
 
     dut._log.info("Zero membranes test passed")
 
@@ -173,14 +176,9 @@ async def test_q_accumulator_uniform_membranes(dut):
 
     assert dut.done.value == 1, f"done not asserted after {max_cycles} cycles"
 
-    # Log results
-    q0 = to_signed(int(dut.q_values[0].value), DATA_WIDTH)
-    q1 = to_signed(int(dut.q_values[1].value), DATA_WIDTH)
-    # TODO: Read weights and biases directly from test .mem file and calculate
-    # expected Q-values to assert against output q_values instead of just logging
-    # for manual verification.
-    dut._log.info(f"Uniform membrane Q[0] = {q0} ({fixed_to_float(q0):.4f})")
-    dut._log.info(f"Uniform membrane Q[1] = {q1} ({fixed_to_float(q1):.4f})")
+    # Log selected action
+    action = int(dut.selected_action.value)
+    dut._log.info(f"Uniform membrane selected_action = {action}")
 
     dut._log.info("Uniform membranes test passed")
 
@@ -234,13 +232,8 @@ async def test_q_accumulator_varying_timesteps(dut):
 
     assert dut.done.value == 1, f"done not asserted after {cycle_count} cycles"
 
-    q0 = to_signed(int(dut.q_values[0].value), DATA_WIDTH)
-    q1 = to_signed(int(dut.q_values[1].value), DATA_WIDTH)
-    # TODO: Read weights and biases directly from test .mem file and calculate
-    # expected Q-values to assert against output q_values instead of just logging
-    # for manual verification.
-    dut._log.info(f"Varying timestep Q[0] = {q0} ({fixed_to_float(q0):.4f})")
-    dut._log.info(f"Varying timestep Q[1] = {q1} ({fixed_to_float(q1):.4f})")
+    action = int(dut.selected_action.value)
+    dut._log.info(f"Varying timestep selected_action = {action}")
 
     dut._log.info("Varying timesteps test passed")
 
@@ -311,8 +304,8 @@ async def test_q_accumulator_restart(dut):
         if dut.done.value == 1:
             break
 
-    q0_first = to_signed(int(dut.q_values[0].value), DATA_WIDTH)
-    dut._log.info(f"First inference Q[0] = {q0_first}")
+    q0_first = int(dut.selected_action.value)
+    dut._log.info(f"First inference selected_action = {q0_first}")
 
     # Second inference with high membrane values (restart while done is high)
     for i in range(NUM_NEURONS):
@@ -331,11 +324,11 @@ async def test_q_accumulator_restart(dut):
         if dut.done.value == 1:
             break
 
-    q0_second = to_signed(int(dut.q_values[0].value), DATA_WIDTH)
-    dut._log.info(f"Second inference Q[0] = {q0_second}")
+    q0_second = int(dut.selected_action.value)
+    dut._log.info(f"Second inference selected_action = {q0_second}")
 
-    # With 10× higher membranes, Q-values should be significantly different
-    # (though exact relationship depends on weights)
+    # With 10× higher membranes, the selected action may differ
+    # depending on weight signs
     dut._log.info("Restart test passed")
 
 
@@ -365,12 +358,7 @@ async def test_q_accumulator_negative_membranes(dut):
 
     assert dut.done.value == 1, "done not asserted"
 
-    q0 = to_signed(int(dut.q_values[0].value), DATA_WIDTH)
-    q1 = to_signed(int(dut.q_values[1].value), DATA_WIDTH)
-    # TODO: Read weights and biases directly from test .mem file and calculate
-    # expected Q-values to assert against output q_values instead of just logging
-    # for manual verification.
-    dut._log.info(f"Negative membrane Q[0] = {q0} ({fixed_to_float(q0):.4f})")
-    dut._log.info(f"Negative membrane Q[1] = {q1} ({fixed_to_float(q1):.4f})")
+    action = int(dut.selected_action.value)
+    dut._log.info(f"Negative membrane selected_action = {action}")
 
     dut._log.info("Negative membranes test passed")

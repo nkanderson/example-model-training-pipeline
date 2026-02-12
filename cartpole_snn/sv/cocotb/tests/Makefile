@@ -51,13 +51,21 @@ else ifeq ($(TEST),neural_network)
     VERILOG_SOURCES = $(PWD)/../sv/neural_network.sv \
                       $(PWD)/../sv/linear_layer.sv \
                       $(PWD)/../sv/lif.sv \
-                      $(PWD)/../sv/spike_buffer.sv \
                       $(PWD)/../sv/neuron_membrane_buffer.sv \
                       $(PWD)/../sv/q_accumulator.sv
     TOPLEVEL = neural_network
     MODULE = test_neural_network
+else ifeq ($(TEST),cartpole_integration)
+    # Full model integration test with gymnasium
+    VERILOG_SOURCES = $(PWD)/../sv/neural_network.sv \
+                      $(PWD)/../sv/linear_layer.sv \
+                      $(PWD)/../sv/lif.sv \
+                      $(PWD)/../sv/neuron_membrane_buffer.sv \
+                      $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = neural_network
+    MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', or 'neural_network')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', or 'cartpole_integration')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -103,6 +111,18 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc_out_weights.mem\"
         COMPILE_ARGS += -Pneural_network.FC_OUT_BIAS_FILE=\"$(PWD)/weights/nn_fc_out_bias.mem\"
     endif
+    ifeq ($(TEST),cartpole_integration)
+        # Full model: 64 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -Pneural_network.NUM_INPUTS=4 -Pneural_network.HL1_SIZE=64
+        COMPILE_ARGS += -Pneural_network.HL2_SIZE=16 -Pneural_network.NUM_ACTIONS=2
+        COMPILE_ARGS += -Pneural_network.NUM_TIMESTEPS=30 -Pneural_network.Q_BATCH_SIZE=4
+        COMPILE_ARGS += -Pneural_network.FC1_WEIGHTS_FILE=\"$(PWD)/weights/fc1_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC1_BIAS_FILE=\"$(PWD)/weights/fc1_bias.mem\"
+        COMPILE_ARGS += -Pneural_network.FC2_WEIGHTS_FILE=\"$(PWD)/weights/fc2_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC2_BIAS_FILE=\"$(PWD)/weights/fc2_bias.mem\"
+        COMPILE_ARGS += -Pneural_network.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fc_out_weights.mem\"
+        COMPILE_ARGS += -Pneural_network.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fc_out_bias.mem\"
+    endif
 endif
 
 # Verilator should be used when needing to trace unpacked arrays
@@ -145,6 +165,18 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/nn_fc_out_weights.mem\"
         COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/nn_fc_out_bias.mem\"
     endif
+    ifeq ($(TEST),cartpole_integration)
+        # Full model: 64 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=64
+        COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
+        COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        COMPILE_ARGS += -GFC1_WEIGHTS_FILE=\"$(PWD)/weights/fc1_weights.mem\"
+        COMPILE_ARGS += -GFC1_BIAS_FILE=\"$(PWD)/weights/fc1_bias.mem\"
+        COMPILE_ARGS += -GFC2_WEIGHTS_FILE=\"$(PWD)/weights/fc2_weights.mem\"
+        COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/fc2_bias.mem\"
+        COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fc_out_weights.mem\"
+        COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fc_out_bias.mem\"
+    endif
 endif
 
 # Output directory for simulation results
@@ -184,6 +216,9 @@ test_q_accumulator:
 
 test_neural_network:
 	$(MAKE) TEST=neural_network
+
+test_cartpole_integration:
+	$(MAKE) TEST=cartpole_integration
 
 # Clean up generated files
 clean::

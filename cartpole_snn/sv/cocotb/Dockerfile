@@ -61,6 +61,11 @@ RUN groupadd --non-unique -g ${GROUP_ID} cocotb_user || true && \
 RUN mkdir -p /workspace/sv /workspace/tests /workspace/results \
   && chown -R cocotb_user:cocotb_user /workspace
 
+# Install Python packages for gymnasium integration tests
+# Must use tabbypy3 (the Python bundled with oss-cad-suite) since cocotb uses it
+COPY tests/requirements.txt /tmp/requirements.txt
+RUN /opt/oss-cad-suite/bin/tabbypy3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
 # Switch to non-root user
 USER cocotb_user
 WORKDIR /workspace
