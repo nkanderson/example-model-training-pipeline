@@ -1,6 +1,6 @@
 # SNN-DQN CartPole Training
 
-Deep Q-Network (DQN) implementation using Spiking Neural Networks (SNNs) for the CartPole-v1 environment.
+Deep Q-Network (DQN) implementation using Spiking Neural Networks (SNNs) for the CartPole-v1 environment. Original script based on an [example from the PyTorch documentation](https://docs.pytorch.org/tutorials/intermediate/reinforcement_q_learning.html).
 
 ## Quick Start
 
