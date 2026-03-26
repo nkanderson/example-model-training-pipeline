@@ -250,11 +250,11 @@ def train(
             agent.optimize(batch_size=batch_size, gamma=gamma)
 
             # Soft update target network: θ' <- τ θ + (1 − τ) θ'
-            target_sd = target_net.state_dict()
-            policy_sd = policy_net.state_dict()
-            for key in policy_sd:
-                target_sd[key] = policy_sd[key] * tau + target_sd[key] * (1 - tau)
-            target_net.load_state_dict(target_sd)
+            with torch.no_grad():
+                for target_param, policy_param in zip(
+                    target_net.parameters(), policy_net.parameters()
+                ):
+                    target_param.mul_(1.0 - tau).add_(policy_param, alpha=tau)
 
             if done:
                 episode_durations.append(t + 1)
