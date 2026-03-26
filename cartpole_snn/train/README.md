@@ -254,6 +254,36 @@ When using `--human-render`, the script displays:
 
 The plot updates during training and shows final results when complete.
 
+## Parallel Optuna (CPU/GPU)
+
+Use `optimize_multi_process.py` to run one shared Optuna study across multiple processes.
+
+```bash
+# CPU: run 8 worker processes
+python optimize_multi_process.py \
+  --device-mode cpu \
+  --workers 8 \
+  --neuron-type leaky \
+  --n-trials 160
+
+# GPU: run 4 workers pinned to GPUs 0-3
+python optimize_multi_process.py \
+  --device-mode gpu \
+  --gpu-ids 0,1,2,3 \
+  --workers 4 \
+  --neuron-type leaky \
+  --n-trials 160
+
+# Auto mode: prefer GPU if CUDA is available, else CPU
+python optimize_multi_process.py --device-mode auto --neuron-type fractional --n-trials 120
+```
+
+Notes:
+- All workers share the same `--study-name` and `--storage`.
+- `--n-trials` is split across workers as evenly as possible.
+- With SQLite storage (`sqlite:///...`), keep CPU worker counts moderate (default cap: 8) to avoid DB write lock contention.
+- Override SQLite cap only if needed: `--allow-oversubscribe-sqlite`.
+
 ## Tips for Hyperparameter Tuning
 
 ### Common Issues and Solutions
