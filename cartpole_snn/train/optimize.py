@@ -24,11 +24,22 @@ Usage examples:
     # Export best config to a standard YAML (usable with main.py --config)
     python optimize.py --neuron-type leaky --study-name leaky-v1 --export-best
 
+    # Run post-optimization importance analysis (fANOVA)
+    python optimize.py --neuron-type leaky --n-trials 50 --get-importance
+
+    # Run importance analysis on an existing study by adding 0 trials
+    python optimize.py --neuron-type leaky --study-name leaky-v1 --n-trials 0 --get-importance
+
     # Use a specific search space file
     python optimize.py --neuron-type leaky --search-space configs/search_spaces/my_custom.yaml
+
+Importance analysis artifacts (when --get-importance is set):
+    optuna_studies/importance/<study_name>/importance.json
+    optuna_studies/importance/<study_name>/importance_plot.html
 """
 
 import argparse
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -268,6 +279,134 @@ def export_best_config(study, output_path: str):
     print(f"Best config exported to: {output_path}")
 
 
+def _build_complete_trials_study(source_study):
+    """Create an in-memory study containing only COMPLETE trials."""
+    complete_trials = source_study.get_trials(
+        deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,)
+    )
+    complete_study = optuna.create_study(direction=source_study.direction)
+    for trial in complete_trials:
+        complete_study.add_trial(trial)
+    return complete_study, complete_trials
+
+
+def run_importance_analysis(
+    study,
+    output_dir: Path,
+    min_complete_trials: int = 30,
+    drift_step: int = 10,
+):
+    """
+    Compute fANOVA-based parameter importances and save artifacts.
+
+    Analysis is performed only on COMPLETE trials. If there are fewer than
+    `min_complete_trials`, a warning is printed and analysis is skipped.
+
+    Artifacts:
+      - JSON summary with importances + drift snapshots
+      - Optuna importance plot (HTML)
+    """
+    complete_study, complete_trials = _build_complete_trials_study(study)
+    n_complete = len(complete_trials)
+
+    if n_complete < min_complete_trials:
+        print(
+            f"WARNING: importance analysis skipped: only {n_complete} complete trials "
+            f"(minimum recommended: {min_complete_trials})."
+        )
+        return None
+
+    evaluator = optuna.importance.FanovaImportanceEvaluator()
+    importances = optuna.importance.get_param_importances(
+        complete_study,
+        evaluator=evaluator,
+    )
+
+    checkpoints = []
+    if n_complete >= min_complete_trials:
+        checkpoint_sizes = list(range(min_complete_trials, n_complete + 1, drift_step))
+        if checkpoint_sizes[-1] != n_complete:
+            checkpoint_sizes.append(n_complete)
+
+        for size in checkpoint_sizes:
+            partial = optuna.create_study(direction=study.direction)
+            for trial in complete_trials[:size]:
+                partial.add_trial(trial)
+
+            partial_importances = optuna.importance.get_param_importances(
+                partial,
+                evaluator=evaluator,
+            )
+            checkpoints.append(
+                {
+                    "n_complete_trials": size,
+                    "importances": partial_importances,
+                }
+            )
+
+    top_param = next(iter(importances.keys()), None)
+    top_param_drift = []
+    if top_param is not None:
+        for checkpoint in checkpoints:
+            top_param_drift.append(
+                {
+                    "n_complete_trials": checkpoint["n_complete_trials"],
+                    "importance": checkpoint["importances"].get(top_param, 0.0),
+                }
+            )
+
+    analysis_payload = {
+        "study_name": study.study_name,
+        "direction": study.direction.name,
+        "timestamp": datetime.now().isoformat(),
+        "evaluator": "fanova",
+        "minimum_complete_trials": min_complete_trials,
+        "complete_trials_used": n_complete,
+        "importances": importances,
+        "importance_drift": {
+            "step": drift_step,
+            "checkpoints": checkpoints,
+            "top_param": top_param,
+            "top_param_drift": top_param_drift,
+        },
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = output_dir / "importance.json"
+    with open(json_path, "w") as file:
+        json.dump(analysis_payload, file, indent=2)
+
+    plot_path = output_dir / "importance_plot.html"
+    try:
+        fig = optuna.visualization.plot_param_importances(
+            complete_study,
+            evaluator=evaluator,
+        )
+        fig.write_html(str(plot_path))
+    except Exception as exc:
+        print(
+            "WARNING: failed to export Optuna importance plot "
+            f"to {plot_path}: {exc}"
+        )
+        plot_path = None
+
+    print(f"Importance JSON saved to: {json_path}")
+    if plot_path is not None:
+        print(f"Importance plot saved to: {plot_path}")
+    print(
+        f"Top parameter by fANOVA: {top_param} "
+        f"(importance={importances.get(top_param, 0.0):.4f})"
+    )
+
+    return {
+        "json_path": str(json_path),
+        "plot_path": str(plot_path) if plot_path is not None else None,
+        "complete_trials": n_complete,
+        "top_param": top_param,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Optuna hyperparameter optimization for SNN-DQN on CartPole",
@@ -345,6 +484,11 @@ Examples:
         default="median",
         choices=["median", "hyperband", "none"],
         help="Optuna pruner strategy (default: median). 'none' disables pruning.",
+    )
+    parser.add_argument(
+        "--get-importance",
+        action="store_true",
+        help="Run post-optimization fANOVA importance analysis and export artifacts.",
     )
 
     args = parser.parse_args()
@@ -455,6 +599,16 @@ Examples:
     output_path = f"configs/optimized-{args.study_name}.yaml"
     export_best_config(study, output_path)
 
+    if args.get_importance:
+        print("\nRunning post-optimization importance analysis (fANOVA)...")
+        importance_dir = Path("optuna_studies") / "importance" / args.study_name
+        run_importance_analysis(
+            study=study,
+            output_dir=importance_dir,
+            min_complete_trials=30,
+            drift_step=10,
+        )
+
     # Summary
     print(f"\nStudy saved to: {args.storage}")
     print(f"To see all trials: optuna-dashboard {args.storage}")
@@ -463,6 +617,10 @@ Examples:
         f"To resume this study: python optimize.py --neuron-type {neuron_type} "
         f"--study-name {args.study_name} --n-trials <N>"
     )
+    if args.get_importance:
+        print(
+            f"Importance artifacts: optuna_studies/importance/{args.study_name}/"
+        )
 
 
 if __name__ == "__main__":
