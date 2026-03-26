@@ -16,10 +16,17 @@ Usage:
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
-from fractional_lif import get_gl_coefficients
+
+# Ensure train/ is on sys.path when running this script from train/scripts/
+TRAIN_DIR = Path(__file__).resolve().parents[1]
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.insert(0, str(TRAIN_DIR))
+
+from utils import compute_gl_coefficients
 
 
 def beta_to_lam(beta: float) -> float:
@@ -294,7 +301,7 @@ def main():
     print(
         f"Computing GL coefficients for alpha={args.alpha}, H={args.history_length}..."
     )
-    coeffs = get_gl_coefficients(args.alpha, args.history_length)
+    coeffs = compute_gl_coefficients(args.alpha, args.history_length)
 
     # We need g_1 to g_{H-1} (skip g_0 = 1)
     coeffs_to_store = coeffs[1:]
