@@ -90,13 +90,13 @@ def compute_fractional_constants(
     }
 
 
-def quantize_coefficients(
+def quantize_coefficients_magnitude(
     coeffs,
     bits: int = 16,
-    frac_bits: int = 14,
+    frac_bits: int = 15,
 ) -> list:
     """
-    Quantize GL coefficients to signed fixed-point.
+    Quantize GL coefficient magnitudes |g_k| to unsigned fixed-point.
 
     Args:
         coeffs: Tensor of GL coefficients (g_1 to g_{H-1})
@@ -104,18 +104,18 @@ def quantize_coefficients(
         frac_bits: Number of fractional bits
 
     Returns:
-        List of quantized integer values
+        List of quantized unsigned integer values
     """
     scale = 1 << frac_bits
-    max_val = (1 << (bits - 1)) - 1
-    min_val = -(1 << (bits - 1))
+    max_val = (1 << bits) - 1
 
-    # Convert to numpy and quantize
+    # Convert to numpy and quantize magnitudes
     coeffs_np = coeffs.numpy() if hasattr(coeffs, "numpy") else np.array(coeffs)
-    quantized = np.round(coeffs_np * scale).astype(np.int64)
+    magnitudes = np.abs(coeffs_np)
+    quantized = np.round(magnitudes * scale).astype(np.int64)
 
-    # Clamp to representable range
-    quantized = np.clip(quantized, min_val, max_val)
+    # Clamp to representable unsigned range
+    quantized = np.clip(quantized, 0, max_val)
 
     return quantized.tolist()
 
@@ -130,7 +130,7 @@ def write_mem_file(
     history_length: int,
 ):
     """
-    Write quantized coefficients to .mem file for $readmemh.
+    Write quantized coefficient magnitudes to .mem file for $readmemh.
 
     Args:
         filepath: Output file path
@@ -155,25 +155,22 @@ def write_mem_file(
 
     with open(filepath, "w") as f:
         # Header
-        f.write("// GL Coefficients for Fractional LIF\n")
+        f.write("// GL Coefficient Magnitudes for Fractional LIF\n")
         f.write(f"// alpha = {alpha}, lambda = {lam:.6f}\n")
         f.write(f"// History length = {history_length}, coefficients = {len(values)}\n")
-        f.write(f"// Format: QS{bits-frac_bits-1}.{frac_bits} ({bits}-bit signed)\n")
-        f.write(f"// Contains g_1 to g_{{{history_length}-1}} (g_0 = 1 is implicit)\n")
+        f.write(f"// Format: QU{bits-frac_bits}.{frac_bits} ({bits}-bit unsigned)\n")
+        f.write(f"// Contains |g_1| to |g_{{{history_length}-1}}| (g_0 = 1 is implicit)\n")
+        f.write("// Assumes 0 < alpha <= 1, where g_k (k>=1) are non-positive\n")
         f.write("//\n")
 
         # Write values
         for i, val in enumerate(values):
-            # Two's complement for negative values
-            if val < 0:
-                hex_val = val & mask
-            else:
-                hex_val = val & mask
+            hex_val = val & mask
 
-            # Original float value for comment
+            # Magnitude float value for comment
             float_val = val / scale
 
-            f.write(f"{hex_val:0{hex_width}X}  // g_{i+1} = {float_val:.6f}\n")
+            f.write(f"{hex_val:0{hex_width}X}  // |g_{i+1}| = {float_val:.6f}\n")
 
 
 def write_constants_header(
@@ -264,8 +261,8 @@ def main():
     parser.add_argument(
         "--coeff-frac-bits",
         type=int,
-        default=14,
-        help="Coefficient fractional bits, default: 14",
+        default=15,
+        help="Coefficient fractional bits, default: 15 (QU1.15 with 16-bit coeffs)",
     )
     parser.add_argument(
         "--output-dir", type=str, required=True, help="Output directory for .mem files"
@@ -288,6 +285,11 @@ def main():
         beta_used = args.beta
         print(f"Computing lambda from beta={args.beta}: lambda = {lam:.6f}")
 
+    # This magnitude-only flow relies on coefficient sign behavior for 0 < alpha <= 1
+    assert 0 < args.alpha <= 1.0, (
+        "Magnitude-only coefficient export requires 0 < alpha <= 1.0"
+    )
+
     # Compute GL coefficients (g_0 to g_{H-1})
     print(
         f"Computing GL coefficients for alpha={args.alpha}, H={args.history_length}..."
@@ -302,8 +304,14 @@ def main():
     print(f"  g_2 = {coeffs[2].item():.6f}")
     print(f"  g_{{H-1}} = {coeffs[-1].item():.6f}")
 
-    # Quantize coefficients
-    quantized = quantize_coefficients(
+    # Validate sign pattern and quantize magnitudes
+    coeffs_np = coeffs_to_store.numpy() if hasattr(coeffs_to_store, "numpy") else np.array(coeffs_to_store)
+    if np.any(coeffs_np > 1e-12):
+        raise ValueError(
+            "Expected g_k <= 0 for k>=1 when 0<alpha<=1; found positive coefficient"
+        )
+
+    quantized = quantize_coefficients_magnitude(
         coeffs_to_store,
         bits=args.coeff_bits,
         frac_bits=args.coeff_frac_bits,

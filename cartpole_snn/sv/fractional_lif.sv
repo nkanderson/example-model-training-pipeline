@@ -24,8 +24,8 @@ module fractional_lif #(
     
     // Fractional-order parameters
     parameter HISTORY_LENGTH = 64,           // Number of past values for GL approximation
-    parameter COEFF_WIDTH = 16,              // GL coefficient width (QS1.14 signed)
-    parameter COEFF_FRAC_BITS = 14,          // Fractional bits in coefficients
+    parameter COEFF_WIDTH = 16,              // GL coefficient magnitude width (QU1.15 unsigned)
+    parameter COEFF_FRAC_BITS = 15,          // Fractional bits in coefficients
     
     // Precomputed constants (from generate_coefficients.py)
     // For α=0.5, dt=1.0, β=0.9 (→ λ=0.111): C=1.0, denom=1.111
@@ -35,7 +35,7 @@ module fractional_lif #(
     // INV_DENOM in Q0.16: 1/1.111 ≈ 0.9 * 65536 ≈ 58982
     parameter [15:0] INV_DENOM = 16'd58982,
     
-    // Coefficient file (GL coefficients g_1 to g_{H-1})
+    // Coefficient file (GL coefficient magnitudes |g_1| to |g_{H-1}|)
     parameter GL_COEFF_FILE = "gl_coefficients.mem"
 ) (
     input wire clk,
@@ -58,13 +58,14 @@ module fractional_lif #(
     logic signed [MEMBRANE_WIDTH-1:0] history_buffer [0:HISTORY_LENGTH-1];
     logic [ADDR_WIDTH-1:0] history_ptr;      // Points to oldest value (next write location)
 
-    // GL coefficients (signed, loaded from file)
-    // g_k for k=1 to HISTORY_LENGTH-1 (g_0=1 is implicit and not stored)
-    logic signed [COEFF_WIDTH-1:0] gl_coeffs [0:HISTORY_LENGTH-2];
+    // GL coefficient magnitudes (unsigned, loaded from file)
+    // |g_k| for k=1 to HISTORY_LENGTH-1 (g_0=1 is implicit and not stored)
+    // Assumes 0 < alpha <= 1, where g_k (k>=1) are non-positive.
+    logic [COEFF_WIDTH-1:0] gl_coeffs_mag [0:HISTORY_LENGTH-2];
     
     // Load pre-computed GL coefficients from memory file
     initial begin
-        $readmemh(GL_COEFF_FILE, gl_coeffs, 0, HISTORY_LENGTH-2);
+        $readmemh(GL_COEFF_FILE, gl_coeffs_mag, 0, HISTORY_LENGTH-2);
     end
 
     // Intermediate computation signals
@@ -73,12 +74,13 @@ module fractional_lif #(
     logic signed [MEMBRANE_WIDTH-1:0] reset_subtract;
     logic next_spike;
     
-    // History sum computation (Σ g_k * V[n-k] for k=1 to H-1)
+    // History magnitude-weighted sum computation (Σ |g_k| * V[n-k] for k=1 to H-1)
     // This needs to be pipelined for large HISTORY_LENGTH, but for now use combinational
     logic signed [47:0] history_sum;  // Wide accumulator for sum of products
 
     // Combinational logic to compute next membrane potential
-    // Implements fractional LIF: V[n] = (I[n] - C * Σ g_k * V[n-k]) / (C + λ)
+    // Implements fractional LIF using |g_k| with 0<alpha<=1 sign property:
+    // V[n] = (I[n] + C * Σ |g_k| * V[n-k]) / (C + λ)
     always_comb begin
         // Default assignments to prevent latches
         current_extended = '0;
@@ -90,14 +92,14 @@ module fractional_lif #(
         // Sign-extend current from DATA_WIDTH to MEMBRANE_WIDTH
         current_extended = {{(MEMBRANE_WIDTH-DATA_WIDTH){current[DATA_WIDTH-1]}}, current};
 
-        // Step 1: Compute history sum Σ_{k=1}^{H-1} g_k * V[n-k]
+        // Step 1: Compute history sum Σ_{k=1}^{H-1} |g_k| * V[n-k]
         // history_ptr points to oldest value, so most recent V[n-1] is at (history_ptr - 1)
         for (int k = 0; k < HISTORY_LENGTH - 1; k++) begin
-            // k=0 in loop corresponds to g_1 * V[n-1], k=1 to g_2 * V[n-2], etc.
+            // k=0 in loop corresponds to |g_1| * V[n-1], k=1 to |g_2| * V[n-2], etc.
             automatic logic [ADDR_WIDTH-1:0] hist_idx;
             automatic logic signed [MEMBRANE_WIDTH-1:0] hist_val;
-            automatic logic signed [COEFF_WIDTH-1:0] coeff;
-            automatic logic signed [MEMBRANE_WIDTH+COEFF_WIDTH-1:0] product;
+            automatic logic [COEFF_WIDTH-1:0] coeff_mag;
+            automatic logic signed [MEMBRANE_WIDTH+COEFF_WIDTH:0] product;
             
             // Calculate circular buffer index for V[n-k-1]
             // history_ptr is where next write goes (oldest), so V[n-1] is at history_ptr-1
@@ -108,21 +110,21 @@ module fractional_lif #(
             end
             
             hist_val = history_buffer[hist_idx];
-            coeff = gl_coeffs[k];
-            product = coeff * hist_val;
+            coeff_mag = gl_coeffs_mag[k];
+            product = $signed({1'b0, coeff_mag}) * hist_val;
             
             // Accumulate (sign-extend product to accumulator width)
-            history_sum = history_sum + {{(48-MEMBRANE_WIDTH-COEFF_WIDTH){product[MEMBRANE_WIDTH+COEFF_WIDTH-1]}}, product};
+            history_sum = history_sum + {{(48-(MEMBRANE_WIDTH+COEFF_WIDTH+1)){product[MEMBRANE_WIDTH+COEFF_WIDTH]}}, product};
         end
 
         // Step 2: Calculate reset subtraction (threshold if prev spike, else 0)
         // reset_delay=True: subtract threshold one cycle after spike
         reset_subtract = spike_prev ? MEMBRANE_WIDTH'($signed(THRESHOLD)) : '0;
 
-        // Step 3: Compute V[n] = (I[n] - C * history_sum) / (C + λ)
+        // Step 3: Compute V[n] = (I[n] + C * history_sum) / (C + λ)
         // Using precomputed C_SCALED (Q8.8) and INV_DENOM (Q0.16)
         // 
-        // Numerator = current_extended - (C_SCALED * history_sum) >> 8
+        // Numerator = current_extended + (C_SCALED * history_sum) >> 8
         // Then multiply by INV_DENOM and shift to get final membrane
         begin
             automatic logic signed [63:0] scaled_history;
@@ -132,8 +134,8 @@ module fractional_lif #(
             // Scale history_sum by C (right shift by 8 for Q8.8, and by COEFF_FRAC_BITS for coeff format)
             scaled_history = (C_SCALED * history_sum) >>> (8 + COEFF_FRAC_BITS);
             
-            // Numerator = I[n] - C * Σ g_k * V[n-k]
-            numerator = current_extended - MEMBRANE_WIDTH'(scaled_history);
+            // Numerator = I[n] + C * Σ |g_k| * V[n-k]
+            numerator = current_extended + MEMBRANE_WIDTH'(scaled_history);
             
             // Divide by (C + λ) via multiplication by 1/(C+λ) = INV_DENOM
             // INV_DENOM is Q0.16, so result needs >> 16
