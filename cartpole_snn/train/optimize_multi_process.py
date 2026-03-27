@@ -204,7 +204,7 @@ def main():
     parser.add_argument(
         "--pruner",
         type=str,
-        default="median",
+        default="none",
         choices=["median", "hyperband", "none"],
         help="Optuna pruner strategy",
     )
