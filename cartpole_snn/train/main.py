@@ -559,6 +559,25 @@ if __name__ == "__main__":
                 ):
                     target_param.mul_(1.0 - tau).add_(policy_param, alpha=tau)
 
+                # Soft-update buffers (e.g. snnTorch membrane potentials, synaptic currents)
+                # The following may be necessary if any neuron implementations used in the SNNPolicy
+                # have buffers that track state (e.g. membrane potentials) across time steps.
+                # Right now, the custom neurons use `persistent=False` so those buffers are excluded
+                # from `state_dict()`. If new implementations use `persistent=True` for any buffers,
+                # then this manual buffer update may be necessary to ensure the target network's internal
+                # state stays in sync with the policy network.
+                # snnTorch stock neurons such as snn.Leaky register their state (e.g. membrane potential)
+                # via `init_hidden()` as plain tensor attributes, not as `register_buffer()` calls, so they
+                # won't be included in either `.parameters()` or `buffers()`. Their state was not included
+                # in the prior implementation either using a full copy-in with intermediate tensors.
+                # for (target_buf_name, target_buf), (_, policy_buf) in zip(
+                #     target_net.named_buffers(), policy_net.named_buffers()
+                # ):
+                #     if target_buf.dtype.is_floating_point:
+                #         target_buf.mul_(1.0 - tau).add_(policy_buf, alpha=tau)
+                #     else:
+                #         target_buf.copy_(policy_buf)
+
             if done:
                 episode_durations.append(t + 1)
                 if human_render:
