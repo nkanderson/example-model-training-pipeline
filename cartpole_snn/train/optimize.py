@@ -481,9 +481,9 @@ Examples:
     parser.add_argument(
         "--pruner",
         type=str,
-        default="median",
+        default="none",
         choices=["median", "hyperband", "none"],
-        help="Optuna pruner strategy (default: median). 'none' disables pruning.",
+        help="Optuna pruner strategy (default: none). 'none' disables pruning.",
     )
     parser.add_argument(
         "--get-importance",
