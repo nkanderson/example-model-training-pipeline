@@ -3,6 +3,7 @@
 # Usage:
 #   make                             # Run LIF tests (default)
 #   make test_lif                    # Run LIF (single-step) tests
+#   make test_fractional_lif         # Run fractional_lif (single-step) tests
 #   make test_lif_timestep           # Run LIF with internal timestep loop tests
 #   make test_linear_layer           # Run linear_layer tests
 #   make test_spike_buffer           # Run spike_buffer tests
@@ -23,6 +24,10 @@ else ifeq ($(TEST),lif_timestep)
     VERILOG_SOURCES = $(PWD)/../sv/lif_timestep.sv
     TOPLEVEL = lif_timestep
     MODULE = test_lif_timestep
+else ifeq ($(TEST),fractional_lif)
+    VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
+    TOPLEVEL = fractional_lif
+    MODULE = test_fractional_lif
 else ifeq ($(TEST),linear_layer)
     VERILOG_SOURCES = $(PWD)/../sv/linear_layer.sv
     TOPLEVEL = linear_layer
@@ -65,7 +70,7 @@ else ifeq ($(TEST),cartpole_integration)
     TOPLEVEL = neural_network
     MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', or 'cartpole_integration')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', or 'cartpole_integration')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -87,6 +92,12 @@ ifeq ($(SIM),icarus)
     endif
     ifeq ($(TEST),spike_buffer_staggered)
         COMPILE_ARGS += -Pspike_buffer_staggered.NUM_NEURONS=8 -Pspike_buffer_staggered.NUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),fractional_lif)
+        COMPILE_ARGS += -Pfractional_lif.HISTORY_LENGTH=8
+        COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pfractional_lif.C_SCALED=16'd256 -Pfractional_lif.INV_DENOM=16'd58982
+        COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE="$(PWD)/weights/fractional_gl_coeffs_h8.mem"
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
@@ -142,6 +153,12 @@ ifeq ($(SIM),verilator)
     ifeq ($(TEST),spike_buffer_staggered)
         COMPILE_ARGS += -GNUM_NEURONS=8 -GNUM_TIMESTEPS=4
     endif
+    ifeq ($(TEST),fractional_lif)
+        COMPILE_ARGS += -GHISTORY_LENGTH=8
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GC_SCALED=16'd256 -GINV_DENOM=16'd58982
+        COMPILE_ARGS += -GGL_COEFF_FILE="$(PWD)/weights/fractional_gl_coeffs_h8.mem"
+    endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=3
     endif
@@ -193,6 +210,9 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 test_lif:
 	$(MAKE) TEST=lif
 
+test_fractional_lif:
+    $(MAKE) TEST=fractional_lif
+
 test_lif_timestep:
 	$(MAKE) TEST=lif_timestep
 
@@ -226,4 +246,4 @@ clean::
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network
+.PHONY: clean test_lif test_fractional_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network

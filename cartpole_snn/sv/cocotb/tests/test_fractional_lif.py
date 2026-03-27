@@ -1,0 +1,260 @@
+"""
+Cocotb tests for fractional_lif.sv.
+
+Covers:
+- reset/clear behavior
+- basic spiking behavior
+- fractional-vs-standard trajectory differences
+- exact fixed-point golden model match to RTL arithmetic
+"""
+
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge, ClockCycles
+
+# Fixed-point / module constants for this test configuration
+DATA_WIDTH = 16
+MEMBRANE_WIDTH = 24
+FRAC_BITS = 13
+SCALE = 1 << FRAC_BITS
+THRESHOLD = 1 << FRAC_BITS
+
+# Fractional parameters used in Makefile overrides
+HISTORY_LENGTH = 8
+COEFF_FRAC_BITS = 15  # QU1.15
+C_SCALED = 256        # Q8.8, C=1.0
+INV_DENOM = 58982     # Q0.16 for 1/(1+0.111...) ~ 0.9
+
+# Coefficient magnitudes |g_k| for alpha=0.5, k=1..7, QU1.15 integers
+COEFFS_MAG = [0x4000, 0x1000, 0x0800, 0x0500, 0x0380, 0x02A0, 0x0210]
+
+# Standard LIF helper constants (for comparison test only)
+BETA_Q1_7 = 115
+
+
+# -----------------------------
+# Numeric helpers
+# -----------------------------
+def wrap_signed(val: int, bits: int) -> int:
+    """Wrap integer to signed two's-complement range for given bit width."""
+    mask = (1 << bits) - 1
+    val &= mask
+    if val >= (1 << (bits - 1)):
+        val -= (1 << bits)
+    return val
+
+
+def float_to_fixed_qs2_13(x: float) -> int:
+    """Convert float to signed QS2.13 integer (returned as signed int)."""
+    raw = int(round(x * SCALE))
+    return wrap_signed(raw, DATA_WIDTH)
+
+
+def signal_to_signed(value: int, bits: int) -> int:
+    """Interpret a cocotb integer value as signed 'bits'-wide."""
+    return wrap_signed(int(value), bits)
+
+
+# -----------------------------
+# Golden models
+# -----------------------------
+class FractionalGolden:
+    """Bit-accurate software model of fractional_lif.sv datapath/state updates."""
+
+    def __init__(self):
+        self.mem = 0
+        self.spike_prev = 0
+        self.history = [0] * HISTORY_LENGTH
+        self.ptr = 0  # points to oldest (next write location)
+
+    def step(self, current_qs2_13: int):
+        # Extend current to membrane width
+        current_ext = wrap_signed(current_qs2_13, MEMBRANE_WIDTH)
+
+        # history_sum = Σ |g_k| * V[n-k], k=1..H-1
+        history_sum = 0  # RTL uses signed [47:0]
+        for k in range(HISTORY_LENGTH - 1):
+            if self.ptr > k:
+                hist_idx = self.ptr - (k + 1)
+            else:
+                hist_idx = HISTORY_LENGTH - (k + 1) + self.ptr
+
+            hist_val = self.history[hist_idx]  # signed 24-bit
+            coeff_mag = COEFFS_MAG[k]          # unsigned 16-bit
+            product = coeff_mag * hist_val     # signed math
+            history_sum = wrap_signed(history_sum + product, 48)
+
+        reset_subtract = THRESHOLD if self.spike_prev else 0
+
+        # scaled_history = (C_SCALED * history_sum) >>> (8 + COEFF_FRAC_BITS)
+        scaled_history = (C_SCALED * history_sum) >> (8 + COEFF_FRAC_BITS)
+
+        # numerator = current_extended + MEMBRANE_WIDTH'(scaled_history)
+        scaled_hist_narrow = wrap_signed(scaled_history, MEMBRANE_WIDTH)
+        numerator = wrap_signed(current_ext + scaled_hist_narrow, MEMBRANE_WIDTH)
+
+        # scaled_result = numerator * signed({1'b0, INV_DENOM}), then >>>16
+        scaled_result = wrap_signed(numerator * INV_DENOM, MEMBRANE_WIDTH + 16)
+        div_result = scaled_result >> 16
+
+        next_mem = wrap_signed(wrap_signed(div_result, MEMBRANE_WIDTH) - reset_subtract, MEMBRANE_WIDTH)
+        next_spike = 1 if next_mem >= THRESHOLD else 0
+
+        # Sequential update order matches RTL
+        self.history[self.ptr] = self.mem
+        self.ptr = (self.ptr + 1) % HISTORY_LENGTH
+        self.mem = next_mem
+        self.spike_prev = next_spike
+
+        return next_spike, next_mem
+
+
+def standard_lif_step(mem: int, spike_prev: int, current_qs2_13: int):
+    """Simple fixed-point standard LIF step for behavioral comparison."""
+    current_ext = wrap_signed(current_qs2_13, MEMBRANE_WIDTH)
+    decay = wrap_signed(mem * BETA_Q1_7, 32) >> 7
+    decay = wrap_signed(decay, MEMBRANE_WIDTH)
+    reset_subtract = THRESHOLD if spike_prev else 0
+    next_mem = wrap_signed(decay + current_ext - reset_subtract, MEMBRANE_WIDTH)
+    next_spike = 1 if next_mem >= THRESHOLD else 0
+    return next_spike, next_mem
+
+
+# -----------------------------
+# DUT helpers
+# -----------------------------
+async def reset_dut(dut):
+    dut.reset.value = 1
+    dut.clear.value = 0
+    dut.enable.value = 0
+    dut.current.value = 0
+    await ClockCycles(dut.clk, 5)
+    dut.reset.value = 0
+    await ClockCycles(dut.clk, 2)
+
+
+async def step_dut(dut, current_signed: int):
+    """Apply one enabled timestep and return (spike, membrane_signed)."""
+    dut.current.value = current_signed & ((1 << DATA_WIDTH) - 1)
+    dut.enable.value = 1
+    await RisingEdge(dut.clk)
+    dut.enable.value = 0
+    await RisingEdge(dut.clk)
+
+    spike = int(dut.spike_out.value)
+    membrane = signal_to_signed(int(dut.membrane_out.value), MEMBRANE_WIDTH)
+    return spike, membrane
+
+
+@cocotb.test()
+async def test_fractional_lif_reset(dut):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    assert int(dut.spike_out.value) == 0
+    assert signal_to_signed(int(dut.membrane_out.value), MEMBRANE_WIDTH) == 0
+
+
+@cocotb.test()
+async def test_fractional_lif_clear(dut):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    # Build non-zero membrane
+    for _ in range(4):
+        await step_dut(dut, float_to_fixed_qs2_13(0.6))
+
+    assert signal_to_signed(int(dut.membrane_out.value), MEMBRANE_WIDTH) != 0
+
+    # Clear state
+    dut.clear.value = 1
+    await RisingEdge(dut.clk)
+    dut.clear.value = 0
+    await RisingEdge(dut.clk)
+
+    assert int(dut.spike_out.value) == 0
+    assert signal_to_signed(int(dut.membrane_out.value), MEMBRANE_WIDTH) == 0
+
+
+@cocotb.test()
+async def test_fractional_lif_no_spike_small_input(dut):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    small = float_to_fixed_qs2_13(0.03)
+    for t in range(20):
+        spike, _ = await step_dut(dut, small)
+        assert spike == 0, f"Unexpected spike at timestep {t}"
+
+
+@cocotb.test()
+async def test_fractional_lif_spike_large_input(dut):
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    big = float_to_fixed_qs2_13(1.5)
+    spike, _ = await step_dut(dut, big)
+    assert spike == 1, "Should spike on first step for large input"
+
+
+@cocotb.test()
+async def test_fractional_vs_standard_lif_pulse_response(dut):
+    """Behavioral difference test using a short pulse then zeros."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    # 3-step pulse then decay window
+    stimulus = [float_to_fixed_qs2_13(0.7)] * 3 + [0] * 20
+
+    frac_mem = []
+    for i_val in stimulus:
+        _, m = await step_dut(dut, i_val)
+        frac_mem.append(m)
+
+    std_mem = []
+    m_std = 0
+    s_prev = 0
+    for i_val in stimulus:
+        s_prev, m_std = standard_lif_step(m_std, s_prev, i_val)
+        std_mem.append(m_std)
+
+    # We only need to verify trajectories differ meaningfully, not exact threshold behavior.
+    assert frac_mem != std_mem, "Fractional and standard trajectories are unexpectedly identical"
+
+    l1_diff = sum(abs(a - b) for a, b in zip(frac_mem, std_mem))
+    assert l1_diff > 32, f"Trajectory difference too small: L1={l1_diff}"
+
+
+@cocotb.test()
+async def test_fractional_lif_matches_fixed_point_golden(dut):
+    """Bit-accurate check against local fixed-point golden model."""
+    clock = Clock(dut.clk, 10, units="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    golden = FractionalGolden()
+
+    stimulus_f = [0.35, 0.0, 0.8, 0.0, 0.0, 0.2, 1.2, 0.0, 0.5, 0.5, -0.1, 0.0]
+    stimulus = [float_to_fixed_qs2_13(x) for x in stimulus_f]
+
+    for t, i_val in enumerate(stimulus):
+        exp_spk, exp_mem = golden.step(i_val)
+        got_spk, got_mem = await step_dut(dut, i_val)
+
+        assert got_spk == exp_spk, (
+            f"Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
+        )
+        assert got_mem == exp_mem, (
+            f"Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
+        )
