@@ -22,8 +22,8 @@ THRESHOLD = 1 << FRAC_BITS
 # Fractional parameters used in Makefile overrides
 HISTORY_LENGTH = 8
 COEFF_FRAC_BITS = 15  # QU1.15
-C_SCALED = 256        # Q8.8, C=1.0
-INV_DENOM = 58982     # Q0.16 for 1/(1+0.111...) ~ 0.9
+C_SCALED = 256  # Q8.8, C=1.0
+INV_DENOM = 58982  # Q0.16 for 1/(1+0.111...) ~ 0.9
 
 # Coefficient magnitudes |g_k| for alpha=0.5, k=1..7, QU1.15 integers
 COEFFS_MAG = [0x4000, 0x1000, 0x0800, 0x0500, 0x0380, 0x02A0, 0x0210]
@@ -40,7 +40,7 @@ def wrap_signed(val: int, bits: int) -> int:
     mask = (1 << bits) - 1
     val &= mask
     if val >= (1 << (bits - 1)):
-        val -= (1 << bits)
+        val -= 1 << bits
     return val
 
 
@@ -80,8 +80,8 @@ class FractionalGolden:
                 hist_idx = HISTORY_LENGTH - (k + 1) + self.ptr
 
             hist_val = self.history[hist_idx]  # signed 24-bit
-            coeff_mag = COEFFS_MAG[k]          # unsigned 16-bit
-            product = coeff_mag * hist_val     # signed math
+            coeff_mag = COEFFS_MAG[k]  # unsigned 16-bit
+            product = coeff_mag * hist_val  # signed math
             history_sum = wrap_signed(history_sum + product, 48)
 
         reset_subtract = THRESHOLD if self.spike_prev else 0
@@ -97,7 +97,9 @@ class FractionalGolden:
         scaled_result = wrap_signed(numerator * INV_DENOM, MEMBRANE_WIDTH + 16)
         div_result = scaled_result >> 16
 
-        next_mem = wrap_signed(wrap_signed(div_result, MEMBRANE_WIDTH) - reset_subtract, MEMBRANE_WIDTH)
+        next_mem = wrap_signed(
+            wrap_signed(div_result, MEMBRANE_WIDTH) - reset_subtract, MEMBRANE_WIDTH
+        )
         next_spike = 1 if next_mem >= THRESHOLD else 0
 
         # Sequential update order matches RTL
@@ -148,7 +150,7 @@ async def step_dut(dut, current_signed: int):
 
 @cocotb.test()
 async def test_fractional_lif_reset(dut):
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -159,7 +161,7 @@ async def test_fractional_lif_reset(dut):
 
 @cocotb.test()
 async def test_fractional_lif_clear(dut):
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -182,7 +184,7 @@ async def test_fractional_lif_clear(dut):
 
 @cocotb.test()
 async def test_fractional_lif_no_spike_small_input(dut):
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -195,7 +197,7 @@ async def test_fractional_lif_no_spike_small_input(dut):
 
 @cocotb.test()
 async def test_fractional_lif_spike_large_input(dut):
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -208,7 +210,7 @@ async def test_fractional_lif_spike_large_input(dut):
 @cocotb.test()
 async def test_fractional_vs_standard_lif_pulse_response(dut):
     """Behavioral difference test using a short pulse then zeros."""
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -229,7 +231,9 @@ async def test_fractional_vs_standard_lif_pulse_response(dut):
         std_mem.append(m_std)
 
     # We only need to verify trajectories differ meaningfully, not exact threshold behavior.
-    assert frac_mem != std_mem, "Fractional and standard trajectories are unexpectedly identical"
+    assert (
+        frac_mem != std_mem
+    ), "Fractional and standard trajectories are unexpectedly identical"
 
     l1_diff = sum(abs(a - b) for a, b in zip(frac_mem, std_mem))
     assert l1_diff > 32, f"Trajectory difference too small: L1={l1_diff}"
@@ -238,7 +242,7 @@ async def test_fractional_vs_standard_lif_pulse_response(dut):
 @cocotb.test()
 async def test_fractional_lif_matches_fixed_point_golden(dut):
     """Bit-accurate check against local fixed-point golden model."""
-    clock = Clock(dut.clk, 10, units="ns")
+    clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
@@ -252,9 +256,9 @@ async def test_fractional_lif_matches_fixed_point_golden(dut):
         exp_spk, exp_mem = golden.step(i_val)
         got_spk, got_mem = await step_dut(dut, i_val)
 
-        assert got_spk == exp_spk, (
-            f"Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
-        )
-        assert got_mem == exp_mem, (
-            f"Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
-        )
+        assert (
+            got_spk == exp_spk
+        ), f"Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
+        assert (
+            got_mem == exp_mem
+        ), f"Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"

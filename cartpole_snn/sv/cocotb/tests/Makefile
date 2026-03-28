@@ -96,8 +96,7 @@ ifeq ($(SIM),icarus)
     ifeq ($(TEST),fractional_lif)
         COMPILE_ARGS += -Pfractional_lif.HISTORY_LENGTH=8
         COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
-        COMPILE_ARGS += -Pfractional_lif.C_SCALED=16'd256 -Pfractional_lif.INV_DENOM=16'd58982
-        COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE="$(PWD)/weights/fractional_gl_coeffs_h8.mem"
+        COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
@@ -156,8 +155,7 @@ ifeq ($(SIM),verilator)
     ifeq ($(TEST),fractional_lif)
         COMPILE_ARGS += -GHISTORY_LENGTH=8
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
-        COMPILE_ARGS += -GC_SCALED=16'd256 -GINV_DENOM=16'd58982
-        COMPILE_ARGS += -GGL_COEFF_FILE="$(PWD)/weights/fractional_gl_coeffs_h8.mem"
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=3
@@ -211,7 +209,7 @@ test_lif:
 	$(MAKE) TEST=lif
 
 test_fractional_lif:
-    $(MAKE) TEST=fractional_lif
+	$(MAKE) TEST=fractional_lif
 
 test_lif_timestep:
 	$(MAKE) TEST=lif_timestep
