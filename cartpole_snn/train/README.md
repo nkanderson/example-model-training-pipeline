@@ -284,6 +284,18 @@ Notes:
 - With SQLite storage (`sqlite:///...`), keep CPU worker counts moderate (default cap: 8) to avoid DB write lock contention.
 - Override SQLite cap only if needed: `--allow-oversubscribe-sqlite`.
 
+After multi-process runs finish, export the final best config once from the complete study:
+
+```bash
+python optimize.py \
+  --neuron-type <leaky|fractional|bitshift> \
+  --study-name <your-study-name> \
+  --storage <your-storage-uri> \
+  --export-best
+```
+
+This avoids last-writer-wins behavior from multiple workers writing the same optimized config file.
+
 ## Tips for Hyperparameter Tuning
 
 ### Common Issues and Solutions
