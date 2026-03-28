@@ -82,6 +82,15 @@ module fractional_lif #(
     // Implements fractional LIF using |g_k| with 0<alpha<=1 sign property:
     // V[n] = (I[n] + C * Σ |g_k| * V[n-k]) / (C + λ)
     always_comb begin
+        logic [ADDR_WIDTH-1:0] hist_idx;
+        logic [ADDR_WIDTH-1:0] k_plus_1;
+        logic signed [MEMBRANE_WIDTH-1:0] hist_val;
+        logic [COEFF_WIDTH-1:0] coeff_mag;
+        logic signed [MEMBRANE_WIDTH+COEFF_WIDTH:0] product;
+        logic signed [63:0] scaled_history;
+        logic signed [MEMBRANE_WIDTH-1:0] numerator;
+        logic signed [MEMBRANE_WIDTH+15:0] scaled_result;
+
         // Default assignments to prevent latches
         current_extended = '0;
         reset_subtract = '0;
@@ -96,23 +105,20 @@ module fractional_lif #(
         // history_ptr points to oldest value, so most recent V[n-1] is at (history_ptr - 1)
         for (int k = 0; k < HISTORY_LENGTH - 1; k++) begin
             // k=0 in loop corresponds to |g_1| * V[n-1], k=1 to |g_2| * V[n-2], etc.
-            automatic logic [ADDR_WIDTH-1:0] hist_idx;
-            automatic logic signed [MEMBRANE_WIDTH-1:0] hist_val;
-            automatic logic [COEFF_WIDTH-1:0] coeff_mag;
-            automatic logic signed [MEMBRANE_WIDTH+COEFF_WIDTH:0] product;
-            
+            k_plus_1 = ADDR_WIDTH'(k + 1);
+
             // Calculate circular buffer index for V[n-k-1]
             // history_ptr is where next write goes (oldest), so V[n-1] is at history_ptr-1
-            if (history_ptr > ADDR_WIDTH'(k)) begin
-                hist_idx = history_ptr - ADDR_WIDTH'(k+1);
+            if (history_ptr >= k_plus_1) begin
+                hist_idx = history_ptr - k_plus_1;
             end else begin
-                hist_idx = ADDR_WIDTH'(HISTORY_LENGTH) - ADDR_WIDTH'(k+1) + history_ptr;
+                hist_idx = history_ptr + ADDR_WIDTH'(HISTORY_LENGTH) - k_plus_1;
             end
-            
+
             hist_val = history_buffer[hist_idx];
             coeff_mag = gl_coeffs_mag[k];
             product = $signed({1'b0, coeff_mag}) * hist_val;
-            
+
             // Accumulate (sign-extend product to accumulator width)
             history_sum = history_sum + {{(48-(MEMBRANE_WIDTH+COEFF_WIDTH+1)){product[MEMBRANE_WIDTH+COEFF_WIDTH]}}, product};
         end
@@ -127,20 +133,16 @@ module fractional_lif #(
         // Numerator = current_extended + (C_SCALED * history_sum) >> 8
         // Then multiply by INV_DENOM and shift to get final membrane
         begin
-            automatic logic signed [63:0] scaled_history;
-            automatic logic signed [MEMBRANE_WIDTH-1:0] numerator;
-            automatic logic signed [MEMBRANE_WIDTH+15:0] scaled_result;
-            
             // Scale history_sum by C (right shift by 8 for Q8.8, and by COEFF_FRAC_BITS for coeff format)
             scaled_history = (C_SCALED * history_sum) >>> (8 + COEFF_FRAC_BITS);
-            
+
             // Numerator = I[n] + C * Σ |g_k| * V[n-k]
             numerator = current_extended + MEMBRANE_WIDTH'(scaled_history);
-            
+
             // Divide by (C + λ) via multiplication by 1/(C+λ) = INV_DENOM
             // INV_DENOM is Q0.16, so result needs >> 16
             scaled_result = numerator * $signed({1'b0, INV_DENOM});
-            
+
             // Apply reset subtraction and extract final membrane value
             next_membrane = MEMBRANE_WIDTH'(scaled_result >>> 16) - reset_subtract;
         end
