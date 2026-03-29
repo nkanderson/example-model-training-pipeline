@@ -60,8 +60,8 @@ snn:
 
   # BitshiftLIF specific parameters
   shift_func:
-    type: categorical
-    choices: ["simple", "slow_decay", "custom", "custom_slow_decay"]
+    type: fixed
+    values: "simple"
   lam:
     type: float
     low: 0.05
