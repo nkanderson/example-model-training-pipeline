@@ -61,7 +61,7 @@ snn:
   # BitshiftLIF specific parameters
   shift_func:
     type: fixed
-    values: "simple"
+    value: "simple"
   lam:
     type: float
     low: 0.05

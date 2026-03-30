@@ -61,7 +61,7 @@ snn:
   # BitshiftLIF specific parameters
   shift_func:
     type: fixed
-    values: "custom_slow_decay"
+    value: "custom_slow_decay"
   lam:
     type: float
     low: 0.05
