@@ -171,24 +171,46 @@ async def test_cartpole_multiple_episodes(dut):
     # Create CartPole environment
     env = gym.make("CartPole-v1")
 
-    num_episodes = 10
-    episode_rewards = []
+    async def run_episode(seed: int) -> tuple[float, int]:
+        await reset_dut(dut)
 
-    for episode in range(num_episodes):
-        observation, info = env.reset(seed=episode * 7 + 42)
-
-        total_reward = 0
+        observation, _ = env.reset(seed=seed)
+        total_reward = 0.0
         step_count = 0
         max_steps = 500
 
         while step_count < max_steps:
             action = await run_inference(dut, observation)
-            observation, reward, terminated, truncated, info = env.step(action)
+            observation, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward
             step_count += 1
 
             if terminated or truncated:
                 break
+
+        return total_reward, step_count
+
+    # Repeatability check: same seed should produce nearly identical performance
+    # if there is no cross-episode state leakage in the DUT.
+    rep_seed = 42
+    rep_rewards = []
+    for idx in range(2):
+        reward, steps = await run_episode(rep_seed)
+        rep_rewards.append(reward)
+        dut._log.info(
+            f"Repeat seed check {idx + 1}: seed={rep_seed}, reward={reward} ({steps} steps)"
+        )
+
+    assert abs(rep_rewards[0] - rep_rewards[1]) <= 5.0, (
+        f"Same-seed repeatability failed (possible state carryover): "
+        f"{rep_rewards[0]} vs {rep_rewards[1]}"
+    )
+
+    num_episodes = 10
+    episode_rewards = []
+
+    for episode in range(num_episodes):
+        total_reward, step_count = await run_episode(seed=episode * 7 + 42)
 
         episode_rewards.append(total_reward)
         dut._log.info(
@@ -206,10 +228,10 @@ async def test_cartpole_multiple_episodes(dut):
     dut._log.info(f"  Min reward: {min_reward:.1f}")
     dut._log.info(f"  Max reward: {max_reward:.1f}")
 
-    # The trained model achieves ~495 average, so expect at least 400 average
+    expected_avg = 300
     assert (
-        avg_reward >= 300
-    ), f"Average reward too low: {avg_reward:.1f} (expected >= 300)"
+        avg_reward >= expected_avg
+    ), f"Average reward too low: {avg_reward:.1f} (expected >= {expected_avg})"
 
     dut._log.info(f"SUCCESS: Average reward {avg_reward:.1f} meets threshold")
 
