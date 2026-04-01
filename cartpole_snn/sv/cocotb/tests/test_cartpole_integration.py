@@ -17,6 +17,8 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
 
+import csv
+import os
 import gymnasium as gym
 import numpy as np
 
@@ -53,6 +55,14 @@ def fixed_to_float(value: int) -> float:
     if value >= 2 ** (TOTAL_BITS - 1):
         value = value - UNSIGNED_RANGE
     return value / SCALE_FACTOR
+
+
+def to_signed(value: int, bits: int) -> int:
+    mask = (1 << bits) - 1
+    value &= mask
+    if value >= (1 << (bits - 1)):
+        value -= (1 << bits)
+    return value
 
 
 async def reset_dut(dut):
@@ -101,6 +111,68 @@ async def run_inference(
     action = int(dut.selected_action.value)
 
     return action
+
+
+async def run_inference_with_trace(
+    dut, observations: np.ndarray, timeout_cycles: int = 50000
+) -> tuple[int, dict]:
+    """Run one inference and return action plus traceable internal summaries."""
+    action = await run_inference(dut, observations, timeout_cycles=timeout_cycles)
+
+    hl2_vals = []
+    for i in range(HL2_SIZE):
+        raw = int(dut.hl2_membranes[i].value)
+        hl2_vals.append(to_signed(raw, 24))
+
+    q0 = ""
+    q1 = ""
+    try:
+        q0 = int(dut.q_accum.q_divided[0].value)
+        q1 = int(dut.q_accum.q_divided[1].value)
+    except Exception:
+        pass
+
+    trace = {
+        "q0": q0,
+        "q1": q1,
+        "hl2_mem_mean": float(np.mean(hl2_vals)) if hl2_vals else "",
+        "hl2_mem_max": int(np.max(hl2_vals)) if hl2_vals else "",
+        "hl2_mem_min": int(np.min(hl2_vals)) if hl2_vals else "",
+    }
+
+    return action, trace
+
+
+async def run_episode_trace(dut, env, seed: int, max_steps: int = 500):
+    """Run one episode and return list of per-step action records."""
+    await reset_dut(dut)
+    observation, _ = env.reset(seed=seed)
+    records = []
+
+    for step in range(max_steps):
+        action, trace = await run_inference_with_trace(dut, observation)
+        records.append(
+            {
+                "seed": seed,
+                "step": step,
+                "action": action,
+                "q0": trace["q0"],
+                "q1": trace["q1"],
+                "hl2_mem_mean": trace["hl2_mem_mean"],
+                "hl2_mem_max": trace["hl2_mem_max"],
+                "hl2_mem_min": trace["hl2_mem_min"],
+                "obs0": float(observation[0]),
+                "obs1": float(observation[1]),
+                "obs2": float(observation[2]),
+                "obs3": float(observation[3]),
+            }
+        )
+
+        observation, _, terminated, truncated, _ = env.step(action)
+        if terminated or truncated:
+            break
+
+    return records
 
 
 @cocotb.test()
@@ -395,3 +467,52 @@ async def test_debug_signals(dut):
         dut._log.warning("No fc1 outputs captured (internal signal not accessible)")
 
     dut._log.info(f"Hardware selected_action: {hw_action}")
+
+
+@cocotb.test()
+async def test_cartpole_action_trace(dut):
+    """Export deterministic hardware action traces for seeds 42 and 49."""
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    env = gym.make("CartPole-v1")
+    seeds = [42, 49]
+    all_records = []
+
+    for seed in seeds:
+        records = await run_episode_trace(dut, env, seed=seed, max_steps=500)
+        all_records.extend(records)
+        dut._log.info(f"Trace seed={seed}: {len(records)} steps")
+
+    env.close()
+
+    results_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "results")
+    )
+    os.makedirs(results_dir, exist_ok=True)
+    out_csv = os.path.join(results_dir, "cartpole_action_trace_hw.csv")
+
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "seed",
+                "step",
+                "action",
+                "q0",
+                "q1",
+                "hl2_mem_mean",
+                "hl2_mem_max",
+                "hl2_mem_min",
+                "obs0",
+                "obs1",
+                "obs2",
+                "obs3",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(all_records)
+
+    dut._log.info(f"Wrote hardware action trace: {out_csv}")
