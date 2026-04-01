@@ -138,6 +138,7 @@ module q_accumulator #(
                         // Initialize accumulators
                         for (int a = 0; a < NUM_ACTIONS; a++) begin
                             q_accum[a] <= '0;
+                            q_divided[a] <= '0;
                         end
                         timestep_counter <= '0;
                         batch_counter <= '0;
@@ -197,6 +198,7 @@ module q_accumulator #(
                     if (start) begin
                         for (int a = 0; a < NUM_ACTIONS; a++) begin
                             q_accum[a] <= '0;
+                            q_divided[a] <= '0;
                         end
                         timestep_counter <= '0;
                         batch_counter <= '0;
