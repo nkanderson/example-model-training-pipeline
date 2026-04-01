@@ -127,8 +127,8 @@ async def run_inference_with_trace(
     q0 = ""
     q1 = ""
     try:
-        q0 = int(dut.q_accum.q_divided[0].value)
-        q1 = int(dut.q_accum.q_divided[1].value)
+        q0 = int(dut.q_accum.q_divided["0"].value)
+        q1 = int(dut.q_accum.q_divided["1"].value)
     except Exception:
         pass
 
@@ -184,6 +184,268 @@ async def run_episode_trace(dut, env, seed: int, max_steps: int = 500):
             break
 
     return records
+
+
+def _safe_int(value_obj, bits: int | None = None):
+    """Best-effort integer conversion for internal probe signals."""
+    try:
+        value = int(value_obj.value)
+        if bits is not None:
+            value = to_signed(value, bits)
+        return value
+    except Exception:
+        return ""
+
+
+def _safe_array_int(parent_obj, array_name: str, idx: int, bits: int | None = None):
+    """Best-effort read for internal array elements across simulator handle styles."""
+    try:
+        arr = getattr(parent_obj, array_name)
+    except Exception:
+        return ""
+
+    for key in (idx, str(idx), f"[{idx}]"):
+        try:
+            value = int(arr[key].value)
+            if bits is not None:
+                value = to_signed(value, bits)
+            return value
+        except Exception:
+            pass
+
+    for alt_name in (f"{array_name}[{idx}]", f"{array_name}_{idx}"):
+        try:
+            value = int(getattr(parent_obj, alt_name).value)
+            if bits is not None:
+                value = to_signed(value, bits)
+            return value
+        except Exception:
+            pass
+
+    return ""
+
+
+def _safe_hl1_spike_count(dut):
+    """Best-effort count of HL1 spikes at current cycle."""
+    try:
+        count = 0
+        num_hl1 = len(dut.hl1_spikes)
+        for i in range(num_hl1):
+            count += int(dut.hl1_spikes[i].value)
+        return count
+    except Exception:
+        return ""
+
+
+def _safe_hl1_sample(dut, sample_size: int = 8) -> tuple[str, str]:
+    """Capture small HL1 current/spike samples for timestep-0 sensitivity checks."""
+    try:
+        num_curr = len(dut.hl1_currents)
+        num_spk = len(dut.hl1_spikes)
+        sample_n = min(sample_size, num_curr, num_spk)
+
+        currents = []
+        spikes = []
+        for i in range(sample_n):
+            curr = _safe_array_int(dut, "hl1_currents", i, bits=TOTAL_BITS)
+            spk = _safe_array_int(dut, "hl1_spikes", i)
+            currents.append("" if curr == "" else str(curr))
+            spikes.append("" if spk == "" else str(spk))
+
+        return ";".join(currents), ";".join(spikes)
+    except Exception:
+        return "", ""
+
+
+async def run_inference_with_timestep_snapshots(
+    dut,
+    observations: np.ndarray,
+    inference_idx: int,
+    timeout_cycles: int = 50000,
+) -> tuple[int, list[dict]]:
+    """Run one inference and collect fc2/HL2/Q snapshots during execution."""
+    obs_floats = [float(observations[i]) for i in range(NUM_INPUTS)]
+    obs_fixed = [float_to_fixed(v) for v in obs_floats]
+
+    for i in range(NUM_INPUTS):
+        dut.observations[i].value = obs_fixed[i]
+
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    records = []
+    cycle = 0
+    last_q_timestep = None
+    hl1_t0_curr_sample = ""
+    hl1_t0_spike_sample = ""
+
+    for cycle in range(timeout_cycles):
+        await RisingEdge(dut.clk)
+
+        if int(dut.fc2_output_valid.value) == 1:
+            ts = int(dut.current_timestep.value)
+            fc2_idx = int(dut.fc2_output_idx.value)
+            fc2_raw = int(dut.fc2_output_current.value)
+            fc2_signed = to_signed(fc2_raw, TOTAL_BITS)
+
+            if ts == 0 and fc2_idx == 0 and hl1_t0_curr_sample == "":
+                hl1_t0_curr_sample, hl1_t0_spike_sample = _safe_hl1_sample(dut)
+
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "fc2_stream",
+                    "timestep": ts,
+                    "fc2_idx": fc2_idx,
+                    "fc2_raw": fc2_raw,
+                    "fc2_signed": fc2_signed,
+                    "fc2_float": fc2_signed / SCALE_FACTOR,
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut),
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl2_mem_mean": "",
+                    "hl2_mem_max": "",
+                    "hl2_mem_min": "",
+                    "q_read_timestep": "",
+                    "q_state": "",
+                    "q_accum0": "",
+                    "q_accum1": "",
+                    "q_div0": "",
+                    "q_div1": "",
+                    "selected_action": "",
+                }
+            )
+
+        if int(dut.fc2_done.value) == 1:
+            ts = int(dut.current_timestep.value)
+            hl2_mem_vals = [
+                to_signed(int(dut.hl2_membranes[i].value), 24) for i in range(HL2_SIZE)
+            ]
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "timestep_summary",
+                    "timestep": ts,
+                    "fc2_idx": "",
+                    "fc2_raw": "",
+                    "fc2_signed": "",
+                    "fc2_float": "",
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut),
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl2_mem_mean": (
+                        float(np.mean(hl2_mem_vals)) if hl2_mem_vals else ""
+                    ),
+                    "hl2_mem_max": int(np.max(hl2_mem_vals)) if hl2_mem_vals else "",
+                    "hl2_mem_min": int(np.min(hl2_mem_vals)) if hl2_mem_vals else "",
+                    "q_read_timestep": _safe_int(dut.q_read_timestep),
+                    "q_state": _safe_int(dut.q_accum.state),
+                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
+                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
+                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
+                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+                    "selected_action": "",
+                }
+            )
+
+        q_state = _safe_int(dut.q_accum.state)
+        q_ts = _safe_int(dut.q_accum.timestep_counter)
+        if q_state != "" and q_state != 0 and q_ts != "" and q_ts != last_q_timestep:
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "q_progress",
+                    "timestep": "",
+                    "fc2_idx": "",
+                    "fc2_raw": "",
+                    "fc2_signed": "",
+                    "fc2_float": "",
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut),
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl2_mem_mean": "",
+                    "hl2_mem_max": "",
+                    "hl2_mem_min": "",
+                    "q_read_timestep": _safe_int(dut.q_read_timestep),
+                    "q_state": q_state,
+                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
+                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
+                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
+                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+                    "selected_action": "",
+                }
+            )
+            last_q_timestep = q_ts
+
+        if dut.done.value == 1:
+            break
+    else:
+        raise TimeoutError(f"Inference did not complete within {timeout_cycles} cycles")
+
+    action = int(dut.selected_action.value)
+    records.append(
+        {
+            "inference": inference_idx,
+            "cycle": cycle,
+            "stage": "final",
+            "timestep": "",
+            "fc2_idx": "",
+            "fc2_raw": "",
+            "fc2_signed": "",
+            "fc2_float": "",
+            "obs0": obs_floats[0],
+            "obs1": obs_floats[1],
+            "obs2": obs_floats[2],
+            "obs3": obs_floats[3],
+            "obs0_fixed": obs_fixed[0],
+            "obs1_fixed": obs_fixed[1],
+            "obs2_fixed": obs_fixed[2],
+            "obs3_fixed": obs_fixed[3],
+            "hl1_spike_count": _safe_hl1_spike_count(dut),
+            "hl1_t0_curr_sample": hl1_t0_curr_sample,
+            "hl1_t0_spike_sample": hl1_t0_spike_sample,
+            "hl2_mem_mean": "",
+            "hl2_mem_max": "",
+            "hl2_mem_min": "",
+            "q_read_timestep": _safe_int(dut.q_read_timestep),
+            "q_state": _safe_int(dut.q_accum.state),
+            "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
+            "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
+            "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
+            "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+            "selected_action": action,
+        }
+    )
+
+    return action, records
 
 
 @cocotb.test()
@@ -576,3 +838,77 @@ async def test_cartpole_action_trace(dut):
         writer.writerows(all_records)
 
     dut._log.info(f"Wrote hardware action trace: {out_csv}")
+
+
+@cocotb.test()
+async def test_cartpole_timestep_snapshots(dut):
+    """Capture per-timestep fc2/HL2/Q snapshots for early seed-42 inferences."""
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    env = gym.make("CartPole-v1")
+    observation, _ = env.reset(seed=42)
+
+    all_records = []
+    max_inferences = 5
+
+    for inference_idx in range(max_inferences):
+        action, records = await run_inference_with_timestep_snapshots(
+            dut, observation, inference_idx=inference_idx
+        )
+        all_records.extend(records)
+
+        observation, _, terminated, truncated, _ = env.step(action)
+        if terminated or truncated:
+            break
+
+    env.close()
+
+    results_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "results")
+    )
+    os.makedirs(results_dir, exist_ok=True)
+    out_csv = os.path.join(results_dir, "cartpole_timestep_snapshots_hw.csv")
+
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "inference",
+                "cycle",
+                "stage",
+                "timestep",
+                "fc2_idx",
+                "fc2_raw",
+                "fc2_signed",
+                "fc2_float",
+                "obs0",
+                "obs1",
+                "obs2",
+                "obs3",
+                "obs0_fixed",
+                "obs1_fixed",
+                "obs2_fixed",
+                "obs3_fixed",
+                "hl1_spike_count",
+                "hl1_t0_curr_sample",
+                "hl1_t0_spike_sample",
+                "hl2_mem_mean",
+                "hl2_mem_max",
+                "hl2_mem_min",
+                "q_read_timestep",
+                "q_state",
+                "q_accum0",
+                "q_accum1",
+                "q_div0",
+                "q_div1",
+                "selected_action",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(all_records)
+
+    assert all_records, "No snapshot records captured"
+    dut._log.info(f"Wrote timestep snapshots: {out_csv} ({len(all_records)} rows)")
