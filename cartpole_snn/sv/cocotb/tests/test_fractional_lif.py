@@ -11,6 +11,7 @@ Covers:
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
+from pathlib import Path
 
 # Fixed-point / module constants for this test configuration
 DATA_WIDTH = 16
@@ -53,6 +54,20 @@ def float_to_fixed_qs2_13(x: float) -> int:
 def signal_to_signed(value: int, bits: int) -> int:
     """Interpret a cocotb integer value as signed 'bits'-wide."""
     return wrap_signed(int(value), bits)
+
+
+def load_coeffs_mem(mem_path: Path, expected_count: int) -> list[int]:
+    coeffs = []
+    with mem_path.open("r") as f:
+        for line in f:
+            data = line.split("//", 1)[0].strip()
+            if not data:
+                continue
+            coeffs.append(int(data, 16))
+    assert len(coeffs) >= expected_count, (
+        f"Coefficient file {mem_path} has {len(coeffs)} entries, expected >= {expected_count}"
+    )
+    return coeffs[:expected_count]
 
 
 # -----------------------------
@@ -105,6 +120,64 @@ class FractionalGolden:
         # Sequential update order matches RTL
         self.history[self.ptr] = self.mem
         self.ptr = (self.ptr + 1) % HISTORY_LENGTH
+        self.mem = next_mem
+        self.spike_prev = next_spike
+
+        return next_spike, next_mem
+
+
+class FractionalGoldenParam:
+    """Parameterized fixed-point golden model matching fractional_lif.sv arithmetic."""
+
+    def __init__(
+        self,
+        history_length: int,
+        coeff_frac_bits: int,
+        c_scaled: int,
+        inv_denom: int,
+        coeffs_mag: list[int],
+    ):
+        self.history_length = history_length
+        self.coeff_frac_bits = coeff_frac_bits
+        self.c_scaled = c_scaled
+        self.inv_denom = inv_denom
+        self.coeffs_mag = coeffs_mag
+        self.mem = 0
+        self.spike_prev = 0
+        self.history = [0] * history_length
+        self.ptr = 0
+
+    def step(self, current_qs2_13: int):
+        current_ext = wrap_signed(current_qs2_13, MEMBRANE_WIDTH)
+
+        history_sum = 0
+        for k in range(self.history_length - 1):
+            if self.ptr >= (k + 1):
+                hist_idx = self.ptr - (k + 1)
+            else:
+                hist_idx = self.ptr + self.history_length - (k + 1)
+
+            hist_val = self.history[hist_idx]
+            coeff_mag = self.coeffs_mag[k]
+            product = coeff_mag * hist_val
+            history_sum = wrap_signed(history_sum + product, 48)
+
+        reset_subtract = THRESHOLD if self.spike_prev else 0
+
+        scaled_history = (self.c_scaled * history_sum) >> (8 + self.coeff_frac_bits)
+        scaled_hist_narrow = wrap_signed(scaled_history, MEMBRANE_WIDTH)
+        numerator = wrap_signed(current_ext + scaled_hist_narrow, MEMBRANE_WIDTH)
+
+        scaled_result = wrap_signed(numerator * self.inv_denom, MEMBRANE_WIDTH + 16)
+        div_result = scaled_result >> 16
+
+        next_mem = wrap_signed(
+            wrap_signed(div_result, MEMBRANE_WIDTH) - reset_subtract, MEMBRANE_WIDTH
+        )
+        next_spike = 1 if next_mem >= THRESHOLD else 0
+
+        self.history[self.ptr] = self.mem
+        self.ptr = (self.ptr + 1) % self.history_length
         self.mem = next_mem
         self.spike_prev = next_spike
 
@@ -262,3 +335,65 @@ async def test_fractional_lif_matches_fixed_point_golden(dut):
         assert (
             got_mem == exp_mem
         ), f"Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
+
+
+@cocotb.test()
+async def test_fractional_lif_matches_fixed_point_golden_integration_params(dut):
+    """Bit-accurate check for integration-time parameter set (H=64, INV_DENOM=58988)."""
+    history_len = int(dut.HISTORY_LENGTH.value)
+    if history_len != 64:
+        cocotb.log.info(
+            f"Skipping integration-params equivalence test (HISTORY_LENGTH={history_len}, expected 64)."
+        )
+        return
+
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    coeff_file = Path("weights/fractional_order/gl_coefficients.mem")
+    coeffs_mag = load_coeffs_mem(coeff_file, history_len - 1)
+
+    golden = FractionalGoldenParam(
+        history_length=history_len,
+        coeff_frac_bits=int(dut.COEFF_FRAC_BITS.value),
+        c_scaled=int(dut.C_SCALED.value),
+        inv_denom=int(dut.INV_DENOM.value),
+        coeffs_mag=coeffs_mag,
+    )
+
+    stimulus_f = [
+        0.02,
+        0.05,
+        0.10,
+        0.25,
+        0.40,
+        -0.05,
+        0.00,
+        0.80,
+        0.10,
+        -0.10,
+        0.30,
+        0.00,
+        0.60,
+        -0.20,
+        0.15,
+        0.45,
+        0.00,
+        0.05,
+        -0.05,
+        0.35,
+    ]
+    stimulus = [float_to_fixed_qs2_13(x) for x in stimulus_f]
+
+    for t, i_val in enumerate(stimulus):
+        exp_spk, exp_mem = golden.step(i_val)
+        got_spk, got_mem = await step_dut(dut, i_val)
+
+        assert got_spk == exp_spk, (
+            f"[H64] Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
+        )
+        assert got_mem == exp_mem, (
+            f"[H64] Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
+        )

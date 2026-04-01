@@ -61,7 +61,7 @@ def to_signed(value: int, bits: int) -> int:
     mask = (1 << bits) - 1
     value &= mask
     if value >= (1 << (bits - 1)):
-        value -= (1 << bits)
+        value -= 1 << bits
     return value
 
 
@@ -141,6 +141,17 @@ async def run_inference_with_trace(
     }
 
     return action, trace
+
+
+def _trace_signature(action: int, trace: dict) -> tuple[int, int, int]:
+    """Return stable integer signature for repeatability checks."""
+    q0 = trace.get("q0", "")
+    q1 = trace.get("q1", "")
+    return (
+        action,
+        int(q0) if q0 != "" else 0,
+        int(q1) if q1 != "" else 0,
+    )
 
 
 async def run_episode_trace(dut, env, seed: int, max_steps: int = 500):
@@ -395,6 +406,55 @@ async def test_observation_range(dut):
         dut._log.info(f"{name}: obs={obs}, action={action}")
 
     dut._log.info("SUCCESS: All observation ranges handled correctly")
+
+
+@cocotb.test()
+async def test_inference_state_leakage(dut):
+    """
+    Detect cross-inference state carryover using repeated identical observations.
+
+    This is a focused dynamics test: repeated inferences with unchanged input
+    should produce identical action/Q signatures if per-inference state is
+    correctly reset/contained.
+    """
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    obs = np.array([0.02, -0.03, 0.01, 0.04], dtype=np.float32)
+
+    signatures = []
+    repeats = 6
+    for idx in range(repeats):
+        action, trace = await run_inference_with_trace(dut, obs)
+        sig = _trace_signature(action, trace)
+        signatures.append(sig)
+        dut._log.info(
+            f"repeat={idx}: action={sig[0]}, q0={sig[1]}, q1={sig[2]}, "
+            f"hl2_mean={trace['hl2_mem_mean']}"
+        )
+
+    baseline = signatures[0]
+    mismatches = [
+        (i, sig) for i, sig in enumerate(signatures[1:], start=1) if sig != baseline
+    ]
+
+    assert not mismatches, (
+        "Cross-inference drift detected for fixed observation; "
+        f"baseline={baseline}, mismatches={mismatches[:3]}"
+    )
+
+    await reset_dut(dut)
+    post_reset_action, post_reset_trace = await run_inference_with_trace(dut, obs)
+    post_reset_sig = _trace_signature(post_reset_action, post_reset_trace)
+
+    assert post_reset_sig == baseline, (
+        "Post-reset signature differs from initial baseline; "
+        f"baseline={baseline}, post_reset={post_reset_sig}"
+    )
+
+    dut._log.info("SUCCESS: No cross-inference state leakage for fixed observation")
 
 
 @cocotb.test()
