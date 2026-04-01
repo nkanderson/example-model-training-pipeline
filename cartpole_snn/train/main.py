@@ -234,6 +234,10 @@ if __name__ == "__main__":
         tau = config["training"]["tau"]
         lr = config["training"]["lr"]
         num_episodes = config["training"]["num_episodes"]
+        eval_every_episodes = config["training"].get("eval_every_episodes", 0)
+        eval_num_episodes = config["training"].get("eval_num_episodes", 10)
+        eval_seed_base = config["training"].get("eval_seed_base", 42)
+        eval_seed_stride = config["training"].get("eval_seed_stride", 7)
 
         num_steps = config["snn"]["num_steps"]
         beta = config["snn"]["beta"]
@@ -277,6 +281,10 @@ if __name__ == "__main__":
         tau = 0.005
         lr = 0.0003
         num_episodes = 600
+        eval_every_episodes = 0
+        eval_num_episodes = 10
+        eval_seed_base = 42
+        eval_seed_stride = 7
 
         num_steps = 30
         beta = 0.9
@@ -323,6 +331,7 @@ if __name__ == "__main__":
 
     # Training parameters
     best_avg_reward = 0
+    best_eval_avg_reward = 0
 
     # Create models directory if it doesn't exist
     models_dir = Path("models")
@@ -452,9 +461,13 @@ if __name__ == "__main__":
                     f"history_length={agent.history_length}, dt={agent.dt}"
                 )
             print(f"Resuming from episode {start_episode} (prev avg: {prev_avg:.2f})")
-            print(f"Running evaluation for {num_episodes} episodes")
+            eval_seeds = [eval_seed_base + i * eval_seed_stride for i in range(10)]
+            print(f"Running evaluation for 10 episodes with fixed seeds: {eval_seeds}")
             episode_rewards, avg_reward = agent.evaluate(
-                env, num_episodes=10, render=True
+                env,
+                num_episodes=10,
+                render=True,
+                seeds=eval_seeds,
             )
             print("Evaluation complete. Exiting.")
             env.close()
@@ -608,6 +621,37 @@ if __name__ == "__main__":
                         agent.save(best_model_filename)
                         print(f"New best model saved! Avg reward: {recent_avg:.2f}")
 
+                # Optional fixed-seed evaluation for generalization-based model selection
+                current_episode = i_episode - start_episode + 1
+                if eval_every_episodes > 0 and (
+                    current_episode % eval_every_episodes == 0
+                ):
+                    eval_seeds = [
+                        eval_seed_base + i * eval_seed_stride
+                        for i in range(eval_num_episodes)
+                    ]
+                    _, eval_avg = agent.evaluate(
+                        env,
+                        num_episodes=eval_num_episodes,
+                        render=False,
+                        seeds=eval_seeds,
+                    )
+                    print(
+                        f"Generalization eval @ episode {i_episode}: avg={eval_avg:.2f} on seeds={eval_seeds}"
+                    )
+
+                    if eval_avg > best_eval_avg_reward:
+                        best_eval_avg_reward = eval_avg
+                        agent.episode = i_episode
+                        agent.avg_reward = eval_avg
+                        generalization_best_model = (
+                            models_dir / f"dqn_{config_name}-best-generalization.pth"
+                        )
+                        agent.save(generalization_best_model)
+                        print(
+                            f"New best generalization model saved! Avg reward: {eval_avg:.2f}"
+                        )
+
                 break
 
     #
@@ -627,6 +671,8 @@ if __name__ == "__main__":
         print(
             f"Best model saved to: {best_model_filename} (avg reward: {best_avg_reward:.2f})"
         )
+    if best_eval_avg_reward > 0:
+        print(f"Best generalization model avg reward: {best_eval_avg_reward:.2f}")
 
     if human_render:
         plt.ioff()  # Turn off interactive mode

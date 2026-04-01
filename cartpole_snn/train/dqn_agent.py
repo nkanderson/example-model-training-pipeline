@@ -343,6 +343,7 @@ class DQNAgent:
         env,
         num_episodes: int = 10,
         render: bool = False,
+        seeds: Optional[List[int]] = None,
     ) -> Tuple[List[float], float]:
         """
         Evaluate the agent's current policy without training.
@@ -354,6 +355,8 @@ class DQNAgent:
             env: Gymnasium environment
             num_episodes: Number of episodes to evaluate
             render: Whether to print per-episode results
+            seeds: Optional list of per-episode seeds for deterministic evaluation.
+                If provided, its length should be >= num_episodes.
 
         Returns:
             Tuple of (episode_rewards, average_reward)
@@ -365,7 +368,10 @@ class DQNAgent:
 
         with torch.no_grad():
             for episode in range(num_episodes):
-                state, info = env.reset()
+                if seeds is not None:
+                    state, info = env.reset(seed=seeds[episode])
+                else:
+                    state, info = env.reset()
                 state = torch.tensor(
                     state, dtype=torch.float32, device=self.device
                 ).unsqueeze(0)
@@ -390,7 +396,12 @@ class DQNAgent:
 
                 total_rewards.append(total_reward)
                 if render:
-                    print(f"Episode {episode + 1}: {total_reward} steps")
+                    if seeds is not None:
+                        print(
+                            f"Episode {episode + 1} (seed={seeds[episode]}): {total_reward} steps"
+                        )
+                    else:
+                        print(f"Episode {episode + 1}: {total_reward} steps")
 
         avg_reward = sum(total_rewards) / len(total_rewards)
         print(f"Average reward over {num_episodes} episodes: {avg_reward:.2f}")
