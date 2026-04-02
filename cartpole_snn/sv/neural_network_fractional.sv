@@ -33,6 +33,7 @@ module neural_network_fractional #(
     parameter NUM_TIMESTEPS = 30,
     // Fixed-point parameters
     parameter DATA_WIDTH = 16,
+    parameter FC2_OUTPUT_WIDTH = DATA_WIDTH,
     parameter MEMBRANE_WIDTH = 24,
     parameter FRAC_BITS = 13,
     // LIF parameters
@@ -189,7 +190,7 @@ module neural_network_fractional #(
     // fc2 (linear_layer): HL1 spikes → HL2 currents
     // =========================================================================
     logic fc2_start;
-    logic signed [DATA_WIDTH-1:0] fc2_output_current;
+    logic signed [FC2_OUTPUT_WIDTH-1:0] fc2_output_current;
     logic [$clog2(HL2_SIZE)-1:0] fc2_output_idx;
     logic fc2_output_valid;
     logic fc2_done;
@@ -207,6 +208,7 @@ module neural_network_fractional #(
         .NUM_INPUTS(HL1_SIZE),
         .NUM_OUTPUTS(HL2_SIZE),
         .DATA_WIDTH(DATA_WIDTH),
+        .OUTPUT_WIDTH(FC2_OUTPUT_WIDTH),
         .FRAC_BITS(FRAC_BITS),
         .WEIGHTS_FILE(FC2_WEIGHTS_FILE),
         .BIAS_FILE(FC2_BIAS_FILE)
@@ -226,7 +228,7 @@ module neural_network_fractional #(
     // =========================================================================
     logic hl2_clear;
     logic hl2_enable [0:HL2_SIZE-1];  // Individual enable per neuron
-    logic signed [DATA_WIDTH-1:0] hl2_currents [0:HL2_SIZE-1];
+    logic signed [FC2_OUTPUT_WIDTH-1:0] hl2_currents [0:HL2_SIZE-1];
     logic hl2_spikes [0:HL2_SIZE-1];  // Not used but output for completeness
     logic signed [MEMBRANE_WIDTH-1:0] hl2_membranes [0:HL2_SIZE-1];
 
@@ -284,7 +286,7 @@ module neural_network_fractional #(
             // HL2 LIF neuron
             fractional_lif #(
                 .THRESHOLD(THRESHOLD),
-                .DATA_WIDTH(DATA_WIDTH),
+                .DATA_WIDTH(FC2_OUTPUT_WIDTH),
                 .MEMBRANE_WIDTH(MEMBRANE_WIDTH),
                 .HISTORY_LENGTH(HISTORY_LENGTH),
                 .COEFF_WIDTH(COEFF_WIDTH),

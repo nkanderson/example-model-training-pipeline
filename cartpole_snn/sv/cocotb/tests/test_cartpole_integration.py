@@ -36,6 +36,7 @@ HL1_SIZE = 64
 HL2_SIZE = 16
 NUM_ACTIONS = 2
 NUM_TIMESTEPS = 30
+SNAPSHOT_FULL_DEBUG = os.getenv("SNAPSHOT_FULL_DEBUG", "0") == "1"
 
 
 def float_to_fixed(value: float) -> int:
@@ -261,6 +262,7 @@ async def run_inference_with_timestep_snapshots(
     dut,
     observations: np.ndarray,
     inference_idx: int,
+    full_debug: bool = False,
     timeout_cycles: int = 50000,
 ) -> tuple[int, list[dict]]:
     """Run one inference and collect fc2/HL2/Q snapshots during execution."""
@@ -279,6 +281,8 @@ async def run_inference_with_timestep_snapshots(
     last_q_timestep = None
     hl1_t0_curr_sample = ""
     hl1_t0_spike_sample = ""
+    fc2_sat_pos_count = 0
+    fc2_sat_neg_count = 0
 
     for cycle in range(timeout_cycles):
         await RisingEdge(dut.clk)
@@ -287,9 +291,16 @@ async def run_inference_with_timestep_snapshots(
             ts = int(dut.current_timestep.value)
             fc2_idx = int(dut.fc2_output_idx.value)
             fc2_raw = int(dut.fc2_output_current.value)
-            fc2_signed = to_signed(fc2_raw, TOTAL_BITS)
+            fc2_bits = len(dut.fc2_output_current)
+            fc2_signed = to_signed(fc2_raw, fc2_bits)
+            fc2_sat_pos = _safe_int(dut.fc2.sat_pos)
+            fc2_sat_neg = _safe_int(dut.fc2.sat_neg)
+            if fc2_sat_pos != "":
+                fc2_sat_pos_count += int(fc2_sat_pos)
+            if fc2_sat_neg != "":
+                fc2_sat_neg_count += int(fc2_sat_neg)
 
-            if ts == 0 and fc2_idx == 0 and hl1_t0_curr_sample == "":
+            if full_debug and ts == 0 and fc2_idx == 0 and hl1_t0_curr_sample == "":
                 hl1_t0_curr_sample, hl1_t0_spike_sample = _safe_hl1_sample(dut)
 
             records.append(
@@ -302,6 +313,10 @@ async def run_inference_with_timestep_snapshots(
                     "fc2_raw": fc2_raw,
                     "fc2_signed": fc2_signed,
                     "fc2_float": fc2_signed / SCALE_FACTOR,
+                    "fc2_sat_pos": fc2_sat_pos,
+                    "fc2_sat_neg": fc2_sat_neg,
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
                     "obs0": obs_floats[0],
                     "obs1": obs_floats[1],
                     "obs2": obs_floats[2],
@@ -310,9 +325,9 @@ async def run_inference_with_timestep_snapshots(
                     "obs1_fixed": obs_fixed[1],
                     "obs2_fixed": obs_fixed[2],
                     "obs3_fixed": obs_fixed[3],
-                    "hl1_spike_count": _safe_hl1_spike_count(dut),
-                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
-                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
                     "hl2_mem_mean": "",
                     "hl2_mem_max": "",
                     "hl2_mem_min": "",
@@ -341,6 +356,10 @@ async def run_inference_with_timestep_snapshots(
                     "fc2_raw": "",
                     "fc2_signed": "",
                     "fc2_float": "",
+                    "fc2_sat_pos": "",
+                    "fc2_sat_neg": "",
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
                     "obs0": obs_floats[0],
                     "obs1": obs_floats[1],
                     "obs2": obs_floats[2],
@@ -349,9 +368,9 @@ async def run_inference_with_timestep_snapshots(
                     "obs1_fixed": obs_fixed[1],
                     "obs2_fixed": obs_fixed[2],
                     "obs3_fixed": obs_fixed[3],
-                    "hl1_spike_count": _safe_hl1_spike_count(dut),
-                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
-                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
                     "hl2_mem_mean": (
                         float(np.mean(hl2_mem_vals)) if hl2_mem_vals else ""
                     ),
@@ -380,6 +399,10 @@ async def run_inference_with_timestep_snapshots(
                     "fc2_raw": "",
                     "fc2_signed": "",
                     "fc2_float": "",
+                    "fc2_sat_pos": "",
+                    "fc2_sat_neg": "",
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
                     "obs0": obs_floats[0],
                     "obs1": obs_floats[1],
                     "obs2": obs_floats[2],
@@ -388,18 +411,18 @@ async def run_inference_with_timestep_snapshots(
                     "obs1_fixed": obs_fixed[1],
                     "obs2_fixed": obs_fixed[2],
                     "obs3_fixed": obs_fixed[3],
-                    "hl1_spike_count": _safe_hl1_spike_count(dut),
-                    "hl1_t0_curr_sample": hl1_t0_curr_sample,
-                    "hl1_t0_spike_sample": hl1_t0_spike_sample,
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
                     "hl2_mem_mean": "",
                     "hl2_mem_max": "",
                     "hl2_mem_min": "",
                     "q_read_timestep": _safe_int(dut.q_read_timestep),
                     "q_state": q_state,
-                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
-                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
-                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
-                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else "",
+                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else "",
+                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else "",
+                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else "",
                     "selected_action": "",
                 }
             )
@@ -421,6 +444,10 @@ async def run_inference_with_timestep_snapshots(
             "fc2_raw": "",
             "fc2_signed": "",
             "fc2_float": "",
+            "fc2_sat_pos": "",
+            "fc2_sat_neg": "",
+            "fc2_sat_pos_count": fc2_sat_pos_count,
+            "fc2_sat_neg_count": fc2_sat_neg_count,
             "obs0": obs_floats[0],
             "obs1": obs_floats[1],
             "obs2": obs_floats[2],
@@ -429,18 +456,18 @@ async def run_inference_with_timestep_snapshots(
             "obs1_fixed": obs_fixed[1],
             "obs2_fixed": obs_fixed[2],
             "obs3_fixed": obs_fixed[3],
-            "hl1_spike_count": _safe_hl1_spike_count(dut),
-            "hl1_t0_curr_sample": hl1_t0_curr_sample,
-            "hl1_t0_spike_sample": hl1_t0_spike_sample,
+            "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+            "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+            "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
             "hl2_mem_mean": "",
             "hl2_mem_max": "",
             "hl2_mem_min": "",
             "q_read_timestep": _safe_int(dut.q_read_timestep),
             "q_state": _safe_int(dut.q_accum.state),
-            "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
-            "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
-            "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
-            "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+            "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else "",
+            "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else "",
+            "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else "",
+            "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else "",
             "selected_action": action,
         }
     )
@@ -856,7 +883,10 @@ async def test_cartpole_timestep_snapshots(dut):
 
     for inference_idx in range(max_inferences):
         action, records = await run_inference_with_timestep_snapshots(
-            dut, observation, inference_idx=inference_idx
+            dut,
+            observation,
+            inference_idx=inference_idx,
+            full_debug=SNAPSHOT_FULL_DEBUG,
         )
         all_records.extend(records)
 
@@ -884,6 +914,10 @@ async def test_cartpole_timestep_snapshots(dut):
                 "fc2_raw",
                 "fc2_signed",
                 "fc2_float",
+                "fc2_sat_pos",
+                "fc2_sat_neg",
+                "fc2_sat_pos_count",
+                "fc2_sat_neg_count",
                 "obs0",
                 "obs1",
                 "obs2",
@@ -911,4 +945,5 @@ async def test_cartpole_timestep_snapshots(dut):
         writer.writerows(all_records)
 
     assert all_records, "No snapshot records captured"
+    dut._log.info(f"Snapshot full debug: {SNAPSHOT_FULL_DEBUG}")
     dut._log.info(f"Wrote timestep snapshots: {out_csv} ({len(all_records)} rows)")

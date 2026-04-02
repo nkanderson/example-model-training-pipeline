@@ -100,6 +100,16 @@ def analyze(csv_path: Path, max_inferences: int, hl2_size: int, preview: int) ->
         ):
             print(f"    {tup}")
 
+        if fc2_rows and "fc2_sat_pos" in fc2_rows[0]:
+            sat_pos_events = sum(to_int(r.get("fc2_sat_pos", "")) or 0 for r in fc2_rows)
+            sat_neg_events = sum(to_int(r.get("fc2_sat_neg", "")) or 0 for r in fc2_rows)
+            sat_pos_count = max((to_int(r.get("fc2_sat_pos_count", "")) or 0) for r in inf_rows)
+            sat_neg_count = max((to_int(r.get("fc2_sat_neg_count", "")) or 0) for r in inf_rows)
+            print(
+                f"  fc2_saturation: pos_events={sat_pos_events} neg_events={sat_neg_events} "
+                f"pos_count={sat_pos_count} neg_count={sat_neg_count}"
+            )
+
         print("  first_timestep_summary:")
         for tup in preview_tuples(
             tsum_rows,

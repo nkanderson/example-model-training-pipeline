@@ -77,6 +77,14 @@ module fractional_lif #(
     // History magnitude-weighted sum computation (Σ |g_k| * V[n-k] for k=1 to H-1)
     // This needs to be pipelined for large HISTORY_LENGTH, but for now use combinational
     logic signed [47:0] history_sum;  // Wide accumulator for sum of products
+    localparam integer HISTORY_SUM_WIDTH = 48;
+    localparam integer C_SCALED_WIDTH = 17;
+    localparam integer SCALED_HISTORY_WIDTH = HISTORY_SUM_WIDTH + C_SCALED_WIDTH;
+    localparam integer NUMERATOR_WIDTH = SCALED_HISTORY_WIDTH + 1;
+    localparam integer INV_DENOM_WIDTH = 17;
+    localparam integer SCALED_RESULT_WIDTH = NUMERATOR_WIDTH + INV_DENOM_WIDTH;
+    localparam signed [MEMBRANE_WIDTH-1:0] MEMBRANE_MAX = {1'b0, {(MEMBRANE_WIDTH-1){1'b1}}};
+    localparam signed [MEMBRANE_WIDTH-1:0] MEMBRANE_MIN = {1'b1, {(MEMBRANE_WIDTH-1){1'b0}}};
 
     // Combinational logic to compute next membrane potential
     // Implements fractional LIF using |g_k| with 0<alpha<=1 sign property:
@@ -87,9 +95,13 @@ module fractional_lif #(
         logic signed [MEMBRANE_WIDTH-1:0] hist_val;
         logic [COEFF_WIDTH-1:0] coeff_mag;
         logic signed [MEMBRANE_WIDTH+COEFF_WIDTH:0] product;
-        logic signed [63:0] scaled_history;
-        logic signed [MEMBRANE_WIDTH-1:0] numerator;
-        logic signed [MEMBRANE_WIDTH+15:0] scaled_result;
+        logic signed [SCALED_HISTORY_WIDTH-1:0] scaled_history;
+        logic signed [NUMERATOR_WIDTH-1:0] numerator;
+        logic signed [SCALED_RESULT_WIDTH-1:0] scaled_result;
+        logic signed [SCALED_RESULT_WIDTH-1:0] membrane_pre_reset;
+        logic signed [SCALED_RESULT_WIDTH-1:0] membrane_after_reset;
+        logic signed [SCALED_RESULT_WIDTH-1:0] membrane_max_ext;
+        logic signed [SCALED_RESULT_WIDTH-1:0] membrane_min_ext;
 
         // Default assignments to prevent latches
         current_extended = '0;
@@ -97,6 +109,13 @@ module fractional_lif #(
         next_membrane = '0;
         next_spike = 1'b0;
         history_sum = '0;
+        scaled_history = '0;
+        numerator = '0;
+        scaled_result = '0;
+        membrane_pre_reset = '0;
+        membrane_after_reset = '0;
+        membrane_max_ext = '0;
+        membrane_min_ext = '0;
 
         // Sign-extend current from DATA_WIDTH to MEMBRANE_WIDTH
         current_extended = {{(MEMBRANE_WIDTH-DATA_WIDTH){current[DATA_WIDTH-1]}}, current};
@@ -134,17 +153,31 @@ module fractional_lif #(
         // Then multiply by INV_DENOM and shift to get final membrane
         begin
             // Scale history_sum by C (right shift by 8 for Q8.8, and by COEFF_FRAC_BITS for coeff format)
-            scaled_history = (C_SCALED * history_sum) >>> (8 + COEFF_FRAC_BITS);
+            scaled_history = ($signed({1'b0, C_SCALED}) * history_sum) >>> (8 + COEFF_FRAC_BITS);
 
             // Numerator = I[n] + C * Σ |g_k| * V[n-k]
-            numerator = current_extended + MEMBRANE_WIDTH'(scaled_history);
+            numerator = {{(NUMERATOR_WIDTH-MEMBRANE_WIDTH){current_extended[MEMBRANE_WIDTH-1]}}, current_extended} +
+                       {{(NUMERATOR_WIDTH-SCALED_HISTORY_WIDTH){scaled_history[SCALED_HISTORY_WIDTH-1]}}, scaled_history};
 
             // Divide by (C + λ) via multiplication by 1/(C+λ) = INV_DENOM
             // INV_DENOM is Q0.16, so result needs >> 16
             scaled_result = numerator * $signed({1'b0, INV_DENOM});
 
-            // Apply reset subtraction and extract final membrane value
-            next_membrane = MEMBRANE_WIDTH'(scaled_result >>> 16) - reset_subtract;
+            // Apply reset subtraction at wide precision, then saturate to membrane width
+            membrane_pre_reset = scaled_result >>> 16;
+            membrane_after_reset = membrane_pre_reset -
+                                   {{(SCALED_RESULT_WIDTH-MEMBRANE_WIDTH){reset_subtract[MEMBRANE_WIDTH-1]}}, reset_subtract};
+
+            membrane_max_ext = {{(SCALED_RESULT_WIDTH-MEMBRANE_WIDTH){MEMBRANE_MAX[MEMBRANE_WIDTH-1]}}, MEMBRANE_MAX};
+            membrane_min_ext = {{(SCALED_RESULT_WIDTH-MEMBRANE_WIDTH){MEMBRANE_MIN[MEMBRANE_WIDTH-1]}}, MEMBRANE_MIN};
+
+            if (membrane_after_reset > membrane_max_ext) begin
+                next_membrane = MEMBRANE_MAX;
+            end else if (membrane_after_reset < membrane_min_ext) begin
+                next_membrane = MEMBRANE_MIN;
+            end else begin
+                next_membrane = membrane_after_reset[MEMBRANE_WIDTH-1:0];
+            end
         end
 
         // Step 4: Generate spike if membrane >= threshold

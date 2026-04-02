@@ -82,8 +82,17 @@ else ifeq ($(TEST),cartpole_integration_fractional)
                       $(PWD)/../sv/q_accumulator.sv
     TOPLEVEL = neural_network_fractional
     MODULE = test_cartpole_integration
+else ifeq ($(TEST),cartpole_integration_fractional_hist8)
+    # Full model integration test with gymnasium using fractional LIF neurons (history_length=8)
+    VERILOG_SOURCES = $(PWD)/../sv/neural_network_fractional.sv \
+                      $(PWD)/../sv/linear_layer.sv \
+                      $(PWD)/../sv/fractional_lif.sv \
+                      $(PWD)/../sv/neuron_membrane_buffer.sv \
+                      $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = neural_network_fractional
+    MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_integration', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', or 'cartpole_integration_fractional')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_integration', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', or 'cartpole_integration_fractional_hist8')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -157,6 +166,7 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
         COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
         COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=64
         COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
         COMPILE_ARGS += -Pneural_network_fractional.C_SCALED=256 -Pneural_network_fractional.INV_DENOM=58988
@@ -167,6 +177,23 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network_fractional.FC2_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc2_bias.mem\"
         COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc_out_weights.mem\"
         COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc_out_bias.mem\"
+    endif
+    ifeq ($(TEST),cartpole_integration_fractional_hist8)
+        # Fractional model with history_length=8 from weights/fractional_hist8: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
+        COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=8
+        COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pneural_network_fractional.C_SCALED=256 -Pneural_network_fractional.INV_DENOM=61388
+        COMPILE_ARGS += -Pneural_network_fractional.GL_COEFF_FILE=\"$(PWD)/weights/fractional_hist8/gl_coefficients.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_bias.mem\"
     endif
 endif
 
@@ -238,6 +265,7 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
         COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
         COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -GHISTORY_LENGTH=64
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
         COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58988
@@ -248,6 +276,23 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc2_bias.mem\"
         COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc_out_weights.mem\"
         COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc_out_bias.mem\"
+    endif
+    ifeq ($(TEST),cartpole_integration_fractional_hist8)
+        # Fractional model with history_length=8 from weights/fractional_hist8: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
+        COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
+        COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -GHISTORY_LENGTH=8
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=61388
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_hist8/gl_coefficients.mem\"
+        COMPILE_ARGS += -GFC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_weights.mem\"
+        COMPILE_ARGS += -GFC1_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_bias.mem\"
+        COMPILE_ARGS += -GFC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_weights.mem\"
+        COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_bias.mem\"
+        COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_weights.mem\"
+        COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_bias.mem\"
     endif
 endif
 
@@ -306,10 +351,13 @@ test_cartpole_integration:
 test_cartpole_integration_fractional:
 	$(MAKE) TEST=cartpole_integration_fractional
 
+test_cartpole_integration_fractional_hist8:
+	$(MAKE) TEST=cartpole_integration_fractional_hist8
+
 # Clean up generated files
 clean::
 	rm -rf $(RESULTS_DIR)/*
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_fractional_lif test_fractional_lif_integration test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional
+.PHONY: clean test_lif test_fractional_lif test_fractional_lif_integration test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8
