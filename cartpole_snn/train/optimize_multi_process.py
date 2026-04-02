@@ -274,6 +274,8 @@ def main():
         default_workers = len(gpu_ids)
     else:
         gpu_ids = []
+        # Default max of 4 to avoid oversubscription on CPU, especially with
+        # SQLite storage. User can override with --workers.
         default_workers = min(os.cpu_count() or 1, 4)
 
     workers = args.workers or default_workers
@@ -315,6 +317,7 @@ def main():
     print(f"Trial split: {trial_splits}")
     if effective_mode == "gpu":
         print(f"GPU ids: {gpu_ids[:workers]}")
+        print("CUDA device order: PCI_BUS_ID (matches nvidia-smi indexing)")
     if is_sqlite_storage(args.storage):
         print(
             "SQLite storage detected: recommended workers <= "
@@ -348,6 +351,8 @@ def main():
 
         env = os.environ.copy()
         if effective_mode == "gpu":
+            # Make CUDA ordinal mapping match nvidia-smi GPU indices.
+            env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             gpu_id = gpu_ids[worker_index]
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
             worker_label = f"gpu{gpu_id}"
@@ -389,6 +394,8 @@ def main():
     if args.get_importance:
         importance_env = os.environ.copy()
         if effective_mode == "gpu":
+            # Keep device index mapping consistent with worker launches.
+            importance_env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             importance_env["CUDA_VISIBLE_DEVICES"] = str(gpu_ids[0])
         else:
             importance_env["CUDA_VISIBLE_DEVICES"] = ""
