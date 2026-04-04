@@ -195,6 +195,13 @@ if __name__ == "__main__":
         help="Show environment rendering and live training plot",
     )
 
+    parser.add_argument(
+        "--max-episode-steps",
+        type=int,
+        default=500,
+        help="Maximum steps per CartPole episode (default: 500)",
+    )
+
     args = parser.parse_args()
 
     # Determine config file to use
@@ -288,6 +295,7 @@ if __name__ == "__main__":
     evaluate_only = args.evaluate_only
     hw_acceleration = args.hw_acceleration
     human_render = args.human_render
+    max_episode_steps = args.max_episode_steps
 
     # Create surrogate gradient function
     spike_grad = surrogate.fast_sigmoid(slope=surrogate_gradient_slope)
@@ -328,7 +336,11 @@ if __name__ == "__main__":
     # Section 2: Initialize replay memory and create the CartPole environment
     #
     memory = ReplayMemory(10000)
-    env = gym.make("CartPole-v1", render_mode="human" if human_render else None)
+    env = gym.make(
+        "CartPole-v1",
+        render_mode="human" if human_render else None,
+        max_episode_steps=max_episode_steps,
+    )
 
     #
     # Section 3: Load networks and optimizer
