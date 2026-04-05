@@ -148,6 +148,8 @@ This avoids false failures from comparing H=8 assumptions against H=64 settings 
 | `test_cartpole_action_trace` | Writes per-step hardware action trace CSV (**FULL_DEBUG only**) |
 | `test_cartpole_timestep_snapshots` | Writes per-cycle FC2/HL2/Q snapshot CSV (**FULL_DEBUG only**) |
 
+For software-vs-hardware trace comparison workflow (`export_action_trace.py` / `compare_action_traces.py`), see `../../train/README.md`.
+
 ## Fractional CartPole Targets
 
 The cocotb tests provide two fractional integration targets in `tests/Makefile`:

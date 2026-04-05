@@ -1,13 +1,11 @@
 # Baseline configuration for SNN-DQN on CartPole-v1
-# This config comes from an Optuna trial scoring
+# This config comes from an Optuna trial scoring at least 490.0 average reward
 
 training:
   batch_size: 64 # Transitions sampled from replay buffer
   gamma: 0.9942693673059027 # Discount factor for future rewards
   eps_start: 0.8173878966841615 # Starting exploration rate
   eps_end: 0.06662389033559024 # Minimum exploration rate
-  # eps_decay controls the rate of exponential decay of epsilon
-  # - If set too low, the agent may not explore enough and get stuck in suboptimal policies
   eps_decay: 2944 # Epsilon decay rate (higher = slower decay, longer exploration)
   tau: 0.005758859359240154 # Target network soft update rate
   lr: 0.0002194505044195212 # AdamW learning rate
