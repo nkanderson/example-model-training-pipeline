@@ -36,7 +36,7 @@ HL1_SIZE = 64
 HL2_SIZE = 16
 NUM_ACTIONS = 2
 NUM_TIMESTEPS = 30
-SNAPSHOT_FULL_DEBUG = os.getenv("SNAPSHOT_FULL_DEBUG", "0") == "1"
+FULL_DEBUG = os.getenv("FULL_DEBUG", os.getenv("SNAPSHOT_FULL_DEBUG", "0")) == "1"
 
 
 def float_to_fixed(value: float) -> int:
@@ -49,13 +49,6 @@ def float_to_fixed(value: float) -> int:
     if scaled < 0:
         scaled = scaled + UNSIGNED_RANGE
     return scaled
-
-
-def fixed_to_float(value: int) -> float:
-    """Convert fixed-point (unsigned representation) to float."""
-    if value >= 2 ** (TOTAL_BITS - 1):
-        value = value - UNSIGNED_RANGE
-    return value / SCALE_FACTOR
 
 
 def to_signed(value: int, bits: int) -> int:
@@ -419,10 +412,22 @@ async def run_inference_with_timestep_snapshots(
                     "hl2_mem_min": "",
                     "q_read_timestep": _safe_int(dut.q_read_timestep),
                     "q_state": q_state,
-                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else "",
-                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else "",
-                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else "",
-                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else "",
+                    "q_accum0": (
+                        _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else ""
+                    ),
+                    "q_accum1": (
+                        _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else ""
+                    ),
+                    "q_div0": (
+                        _safe_array_int(dut.q_accum, "q_divided", 0)
+                        if full_debug
+                        else ""
+                    ),
+                    "q_div1": (
+                        _safe_array_int(dut.q_accum, "q_divided", 1)
+                        if full_debug
+                        else ""
+                    ),
                     "selected_action": "",
                 }
             )
@@ -464,10 +469,18 @@ async def run_inference_with_timestep_snapshots(
             "hl2_mem_min": "",
             "q_read_timestep": _safe_int(dut.q_read_timestep),
             "q_state": _safe_int(dut.q_accum.state),
-            "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else "",
-            "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else "",
-            "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else "",
-            "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else "",
+            "q_accum0": (
+                _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else ""
+            ),
+            "q_accum1": (
+                _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else ""
+            ),
+            "q_div0": (
+                _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else ""
+            ),
+            "q_div1": (
+                _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else ""
+            ),
             "selected_action": action,
         }
     )
@@ -600,7 +613,7 @@ async def test_cartpole_multiple_episodes(dut):
     dut._log.info(f"  Min reward: {min_reward:.1f}")
     dut._log.info(f"  Max reward: {max_reward:.1f}")
 
-    expected_avg = 300
+    expected_avg = 400
     assert (
         avg_reward >= expected_avg
     ), f"Average reward too low: {avg_reward:.1f} (expected >= {expected_avg})"
@@ -661,25 +674,19 @@ async def test_inference_timing(dut):
 
 
 @cocotb.test()
-async def test_observation_range(dut):
+async def test_fc2_no_saturation_observation_ranges(dut):
     """
-    Test that the model handles the full CartPole observation range.
+    Verify FC2 does not saturate across representative observation ranges.
 
-    CartPole observations can have quite large values:
-    - Cart position: [-4.8, 4.8]
-    - Cart velocity: [-inf, inf] (typically small)
-    - Pole angle: [-0.418, 0.418] rad (~24 degrees)
-    - Pole velocity: [-inf, inf]
-
-    We test with various observation ranges to ensure the hardware
-    handles them correctly without overflow.
+    This is a stronger overflow-oriented check than action validity alone,
+    because selected_action being 0/1 does not guarantee intermediate math
+    stayed in range.
     """
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
 
-    # Test cases with various observation ranges
     test_cases = [
         ("Small values", np.array([0.01, 0.02, 0.03, 0.01])),
         ("Moderate values", np.array([0.5, -0.5, 0.2, -0.3])),
@@ -687,14 +694,38 @@ async def test_observation_range(dut):
         ("Edge of representable", np.array([3.0, -2.0, 0.4, -1.5])),
     ]
 
-    for name, obs in test_cases:
-        action = await run_inference(dut, obs)
+    for case_idx, (name, obs) in enumerate(test_cases):
+        action, records = await run_inference_with_timestep_snapshots(
+            dut,
+            obs,
+            inference_idx=case_idx,
+            full_debug=False,
+        )
 
         assert action in [0, 1], f"Invalid action: {action}"
+        assert records, f"No snapshot records captured for case: {name}"
 
-        dut._log.info(f"{name}: obs={obs}, action={action}")
+        final_record = next(
+            (r for r in reversed(records) if r["stage"] == "final"), None
+        )
+        assert (
+            final_record is not None
+        ), f"Missing final snapshot record for case: {name}"
 
-    dut._log.info("SUCCESS: All observation ranges handled correctly")
+        sat_pos = int(final_record["fc2_sat_pos_count"])
+        sat_neg = int(final_record["fc2_sat_neg_count"])
+
+        assert sat_pos == 0 and sat_neg == 0, (
+            f"FC2 saturation detected for {name}: "
+            f"sat_pos_count={sat_pos}, sat_neg_count={sat_neg}, obs={obs}"
+        )
+
+        dut._log.info(
+            f"{name}: obs={obs}, action={action}, "
+            f"fc2_sat_pos_count={sat_pos}, fc2_sat_neg_count={sat_neg}"
+        )
+
+    dut._log.info("SUCCESS: No FC2 saturation across tested observation ranges")
 
 
 @cocotb.test()
@@ -747,80 +778,12 @@ async def test_inference_state_leakage(dut):
 
 
 @cocotb.test()
-async def test_debug_signals(dut):
-    """
-    Debug test to trace internal signals and understand Q-value saturation.
-
-    This test runs inference with known inputs and logs internal signal values.
-    """
-    clock = Clock(dut.clk, 10, unit="ns")
-    cocotb.start_soon(clock.start())
-
-    await reset_dut(dut)
-
-    # Use small observations that caused saturation
-    obs = np.array([0.01, 0.02, 0.03, 0.01])
-
-    # Set observations
-    for i in range(NUM_INPUTS):
-        fixed_val = float_to_fixed(float(obs[i]))
-        dut.observations[i].value = fixed_val
-        dut._log.info(
-            f"obs[{i}] = {obs[i]:.4f} -> fixed = {fixed_val} (hex: {fixed_val:04x})"
-        )
-
-    # Start inference
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
-
-    # Log fc1 outputs as they become valid
-    fc1_outputs = []
-    fc1_count = 0
-    fc2_outputs = []
-    fc2_count = 0
-
-    # Monitor fc1 output
-    for cycle in range(1000):
-        await RisingEdge(dut.clk)
-
-        # Check fc1 progress
-        if hasattr(dut, "fc1_valid") and dut.fc1_valid.value == 1:
-            fc1_idx = int(dut.fc1_output_idx.value)
-            fc1_current = int(dut.fc1_output_current.value)
-            fc1_float = fixed_to_float(fc1_current)
-            fc1_outputs.append((fc1_idx, fc1_current, fc1_float))
-            fc1_count += 1
-            if fc1_count <= 5:  # Log first few
-                dut._log.info(
-                    f"fc1[{fc1_idx}] = {fc1_float:.4f} (hex: {fc1_current:04x})"
-                )
-
-        if dut.done.value == 1:
-            break
-
-    # Log hardware-selected action
-    hw_action = int(dut.selected_action.value)
-    dut._log.info(f"Hardware selected_action: {hw_action}")
-
-    # Analyze fc1 outputs
-    if fc1_outputs:
-        fc1_values = [v[2] for v in fc1_outputs]
-        dut._log.info(
-            f"fc1 outputs: count={len(fc1_outputs)}, min={min(fc1_values):.4f}, max={max(fc1_values):.4f}"
-        )
-        # Log all fc1 outputs
-        for idx, raw, val in fc1_outputs[:10]:
-            dut._log.info(f"  fc1[{idx}] = {val:.4f}")
-    else:
-        dut._log.warning("No fc1 outputs captured (internal signal not accessible)")
-
-    dut._log.info(f"Hardware selected_action: {hw_action}")
-
-
-@cocotb.test()
 async def test_cartpole_action_trace(dut):
     """Export deterministic hardware action traces for seeds 42 and 49."""
+    if not FULL_DEBUG:
+        cocotb.log.info("Skipping test_cartpole_action_trace (set FULL_DEBUG=1)")
+        return
+
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
@@ -870,6 +833,12 @@ async def test_cartpole_action_trace(dut):
 @cocotb.test()
 async def test_cartpole_timestep_snapshots(dut):
     """Capture per-timestep fc2/HL2/Q snapshots for early seed-42 inferences."""
+    if not FULL_DEBUG:
+        cocotb.log.info(
+            "Skipping test_cartpole_timestep_snapshots (set FULL_DEBUG=1)"
+        )
+        return
+
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
@@ -886,7 +855,7 @@ async def test_cartpole_timestep_snapshots(dut):
             dut,
             observation,
             inference_idx=inference_idx,
-            full_debug=SNAPSHOT_FULL_DEBUG,
+            full_debug=FULL_DEBUG,
         )
         all_records.extend(records)
 
@@ -945,5 +914,5 @@ async def test_cartpole_timestep_snapshots(dut):
         writer.writerows(all_records)
 
     assert all_records, "No snapshot records captured"
-    dut._log.info(f"Snapshot full debug: {SNAPSHOT_FULL_DEBUG}")
+    dut._log.info(f"Snapshot full debug: {FULL_DEBUG}")
     dut._log.info(f"Wrote timestep snapshots: {out_csv} ({len(all_records)} rows)")

@@ -132,8 +132,8 @@ docker compose down
 | `test_cartpole_single_episode` | Runs one CartPole episode with hardware policy |
 | `test_cartpole_multiple_episodes` | Runs 10 episodes + repeatability check |
 | `test_inference_state_leakage` | Repeats fixed observation to detect state carryover |
-| `test_cartpole_action_trace` | Writes per-step hardware action trace CSV |
-| `test_cartpole_timestep_snapshots` | Writes per-cycle FC2/HL2/Q snapshot CSV |
+| `test_cartpole_action_trace` | Writes per-step hardware action trace CSV (**FULL_DEBUG only**) |
+| `test_cartpole_timestep_snapshots` | Writes per-cycle FC2/HL2/Q snapshot CSV (**FULL_DEBUG only**) |
 
 ## Fractional CartPole Targets
 
@@ -153,7 +153,7 @@ Run from `cocotb/tests` inside container.
 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_multiple_episodes
 
 # 2) Snapshot export for low-level diagnostics
-make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
+FULL_DEBUG=1 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
 
 # 3) Analyze snapshots
 python analyze_timestep_snapshots.py --csv ../results/cartpole_timestep_snapshots_hw.csv
@@ -161,17 +161,18 @@ python analyze_timestep_snapshots.py --csv ../results/cartpole_timestep_snapshot
 
 ## Snapshot Debug Modes
 
-`test_cartpole_timestep_snapshots` supports two modes:
+Debug CSV export tests (`test_cartpole_action_trace`, `test_cartpole_timestep_snapshots`) only run when `FULL_DEBUG=1`.
 
-- **Lightweight (default):** `SNAPSHOT_FULL_DEBUG=0` (or unset)
-    - Always captures FC2 stream, HL2 summaries, and FC2 saturation counters.
-- **Full debug:** `SNAPSHOT_FULL_DEBUG=1`
-    - Adds HL1 spike counts/samples and internal q-accumulator probe fields.
+`test_cartpole_timestep_snapshots`:
+    - Runs export and captures FC2 stream, HL2 summaries, FC2 saturation counters, plus HL1/Q probe fields.
+    - May be followed by running the `analyze_timestep_snapshots.py` script
+
+Backward compatibility: `SNAPSHOT_FULL_DEBUG` is still accepted as a fallback.
 
 Example full-debug run:
 
 ```bash
-SNAPSHOT_FULL_DEBUG=1 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
+FULL_DEBUG=1 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
 ```
 
 ## What to Look For in Snapshot Analysis

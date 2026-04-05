@@ -1,16 +1,18 @@
 # Makefile for running cocotb tests on SNN modules
 #
 # Usage:
-#   make                             # Run LIF tests (default)
-#   make test_lif                    # Run LIF (single-step) tests
-#   make test_fractional_lif         # Run fractional_lif (single-step) tests
-#   make test_lif_timestep           # Run LIF with internal timestep loop tests
-#   make test_linear_layer           # Run linear_layer tests
-#   make test_spike_buffer           # Run spike_buffer tests
-#   make test_spike_buffer_staggered # Run spike_buffer_staggered tests (legacy)
-#   make test_membrane_buffer        # Run membrane_buffer tests
-#   make test_neuron_membrane_buffer # Run neuron_membrane_buffer tests
-#   make clean                       # Clean build artifacts
+#   make                                 # Run LIF tests (default)
+#   make test_lif                        # Run LIF (single-step) tests
+#   make test_fractional_lif             # Run fractional_lif (single-step) tests
+#   make test_lif_timestep               # Run LIF with internal timestep loop tests
+#   make test_linear_layer               # Run linear_layer tests
+#   make test_spike_buffer               # Run spike_buffer tests
+#   make test_spike_buffer_staggered     # Run spike_buffer_staggered tests (legacy)
+#   make test_membrane_buffer            # Run membrane_buffer tests
+#   make test_neuron_membrane_buffer     # Run neuron_membrane_buffer tests
+#   make cartpole_integration            # Run cartpole_integration tests
+#   make cartpole_integration_fractional # Run cartpole_integration_fractional tests
+#   make clean                           # Clean build artifacts
 
 # Default test module
 TEST ?= lif
@@ -28,7 +30,7 @@ else ifeq ($(TEST),fractional_lif)
     VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
     TOPLEVEL = fractional_lif
     MODULE = test_fractional_lif
-else ifeq ($(TEST),fractional_lif_integration)
+else ifeq ($(TEST),fractional_lif_hist64)
     VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
     TOPLEVEL = fractional_lif
     MODULE = test_fractional_lif
@@ -92,7 +94,7 @@ else ifeq ($(TEST),cartpole_integration_fractional_hist8)
     TOPLEVEL = neural_network_fractional
     MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_integration', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', or 'cartpole_integration_fractional_hist8')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_hist64', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', or 'cartpole_integration_fractional_hist8')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -120,7 +122,7 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
         COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
     endif
-    ifeq ($(TEST),fractional_lif_integration)
+    ifeq ($(TEST),fractional_lif_hist64)
         COMPILE_ARGS += -Pfractional_lif.HISTORY_LENGTH=64
         COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
         COMPILE_ARGS += -Pfractional_lif.C_SCALED=256 -Pfractional_lif.INV_DENOM=58988
@@ -219,7 +221,7 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
         COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
     endif
-    ifeq ($(TEST),fractional_lif_integration)
+    ifeq ($(TEST),fractional_lif_hist64)
         COMPILE_ARGS += -GHISTORY_LENGTH=64
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
         COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58988
@@ -318,8 +320,8 @@ test_lif:
 test_fractional_lif:
 	$(MAKE) TEST=fractional_lif
 
-test_fractional_lif_integration:
-	$(MAKE) TEST=fractional_lif_integration
+test_fractional_lif_hist64:
+	$(MAKE) TEST=fractional_lif_hist64
 
 test_lif_timestep:
 	$(MAKE) TEST=lif_timestep
@@ -360,4 +362,4 @@ clean::
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_fractional_lif test_fractional_lif_integration test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8
+.PHONY: clean test_lif test_fractional_lif test_fractional_lif_hist64 test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8
