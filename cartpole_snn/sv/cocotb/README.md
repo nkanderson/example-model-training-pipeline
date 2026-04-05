@@ -125,6 +125,19 @@ docker compose down
 | `test_linear_layer_multiple_runs` | Module can be started multiple times |
 | `test_linear_layer_timing` | Verifies NUM_OUTPUTS valid outputs in correct timing |
 
+### Fractional LIF Golden Tests (`test_fractional_lif.py`)
+
+The file includes two bit-accurate golden checks with intentional profile gating:
+
+- `test_fractional_lif_matches_fixed_point_golden_baseline`
+    - Runs only for baseline H=8 profile (e.g., `make test_fractional_lif`)
+    - Skips when `HISTORY_LENGTH != 8`
+- `test_fractional_lif_matches_fixed_point_golden_hist64`
+    - Runs only for H=64 variant profile (e.g., `make test_fractional_lif_hist64`)
+    - Skips when `HISTORY_LENGTH != 64`
+
+This avoids false failures from comparing H=8 assumptions against H=64 settings (and vice versa).
+
 ### CartPole Integration Tests (`test_cartpole_integration.py`)
 
 | Test | Description |

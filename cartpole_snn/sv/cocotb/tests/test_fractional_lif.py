@@ -20,7 +20,13 @@ FRAC_BITS = 13
 SCALE = 1 << FRAC_BITS
 THRESHOLD = 1 << FRAC_BITS
 
-# Fractional parameters used in Makefile overrides
+# Fractional parameters for the baseline unit test profile (H=8).
+#
+# Important:
+# - `test_fractional_lif_matches_fixed_point_golden_baseline` is intentionally tied to this
+#   baseline profile.
+# - `test_fractional_lif_matches_fixed_point_golden_hist64` covers the
+#   H=64 variant profile used by the corresponding hist64 target.
 HISTORY_LENGTH = 8
 COEFF_FRAC_BITS = 15  # QU1.15
 C_SCALED = 256  # Q8.8, C=1.0
@@ -64,9 +70,9 @@ def load_coeffs_mem(mem_path: Path, expected_count: int) -> list[int]:
             if not data:
                 continue
             coeffs.append(int(data, 16))
-    assert len(coeffs) >= expected_count, (
-        f"Coefficient file {mem_path} has {len(coeffs)} entries, expected >= {expected_count}"
-    )
+    assert (
+        len(coeffs) >= expected_count
+    ), f"Coefficient file {mem_path} has {len(coeffs)} entries, expected >= {expected_count}"
     return coeffs[:expected_count]
 
 
@@ -74,60 +80,7 @@ def load_coeffs_mem(mem_path: Path, expected_count: int) -> list[int]:
 # Golden models
 # -----------------------------
 class FractionalGolden:
-    """Bit-accurate software model of fractional_lif.sv datapath/state updates."""
-
-    def __init__(self):
-        self.mem = 0
-        self.spike_prev = 0
-        self.history = [0] * HISTORY_LENGTH
-        self.ptr = 0  # points to oldest (next write location)
-
-    def step(self, current_qs2_13: int):
-        # Extend current to membrane width
-        current_ext = wrap_signed(current_qs2_13, MEMBRANE_WIDTH)
-
-        # history_sum = Σ |g_k| * V[n-k], k=1..H-1
-        history_sum = 0  # RTL uses signed [47:0]
-        for k in range(HISTORY_LENGTH - 1):
-            if self.ptr > k:
-                hist_idx = self.ptr - (k + 1)
-            else:
-                hist_idx = HISTORY_LENGTH - (k + 1) + self.ptr
-
-            hist_val = self.history[hist_idx]  # signed 24-bit
-            coeff_mag = COEFFS_MAG[k]  # unsigned 16-bit
-            product = coeff_mag * hist_val  # signed math
-            history_sum = wrap_signed(history_sum + product, 48)
-
-        reset_subtract = THRESHOLD if self.spike_prev else 0
-
-        # scaled_history = (C_SCALED * history_sum) >>> (8 + COEFF_FRAC_BITS)
-        scaled_history = (C_SCALED * history_sum) >> (8 + COEFF_FRAC_BITS)
-
-        # numerator = current_extended + MEMBRANE_WIDTH'(scaled_history)
-        scaled_hist_narrow = wrap_signed(scaled_history, MEMBRANE_WIDTH)
-        numerator = wrap_signed(current_ext + scaled_hist_narrow, MEMBRANE_WIDTH)
-
-        # scaled_result = numerator * signed({1'b0, INV_DENOM}), then >>>16
-        scaled_result = wrap_signed(numerator * INV_DENOM, MEMBRANE_WIDTH + 16)
-        div_result = scaled_result >> 16
-
-        next_mem = wrap_signed(
-            wrap_signed(div_result, MEMBRANE_WIDTH) - reset_subtract, MEMBRANE_WIDTH
-        )
-        next_spike = 1 if next_mem >= THRESHOLD else 0
-
-        # Sequential update order matches RTL
-        self.history[self.ptr] = self.mem
-        self.ptr = (self.ptr + 1) % HISTORY_LENGTH
-        self.mem = next_mem
-        self.spike_prev = next_spike
-
-        return next_spike, next_mem
-
-
-class FractionalGoldenParam:
-    """Parameterized fixed-point golden model matching fractional_lif.sv arithmetic."""
+    """Parameterized bit-accurate model matching fractional_lif.sv arithmetic."""
 
     def __init__(
         self,
@@ -145,29 +98,35 @@ class FractionalGoldenParam:
         self.mem = 0
         self.spike_prev = 0
         self.history = [0] * history_length
-        self.ptr = 0
+        self.ptr = 0  # points to oldest (next write location)
 
     def step(self, current_qs2_13: int):
+        # Extend current to membrane width
         current_ext = wrap_signed(current_qs2_13, MEMBRANE_WIDTH)
 
-        history_sum = 0
+        # history_sum = Σ |g_k| * V[n-k], k=1..H-1
+        history_sum = 0  # RTL uses signed [47:0]
         for k in range(self.history_length - 1):
             if self.ptr >= (k + 1):
                 hist_idx = self.ptr - (k + 1)
             else:
                 hist_idx = self.ptr + self.history_length - (k + 1)
 
-            hist_val = self.history[hist_idx]
-            coeff_mag = self.coeffs_mag[k]
-            product = coeff_mag * hist_val
+            hist_val = self.history[hist_idx]  # signed 24-bit
+            coeff_mag = self.coeffs_mag[k]  # unsigned 16-bit
+            product = coeff_mag * hist_val  # signed math
             history_sum = wrap_signed(history_sum + product, 48)
 
         reset_subtract = THRESHOLD if self.spike_prev else 0
 
+        # scaled_history = (c_scaled * history_sum) >>> (8 + coeff_frac_bits)
         scaled_history = (self.c_scaled * history_sum) >> (8 + self.coeff_frac_bits)
+
+        # numerator = current_extended + MEMBRANE_WIDTH'(scaled_history)
         scaled_hist_narrow = wrap_signed(scaled_history, MEMBRANE_WIDTH)
         numerator = wrap_signed(current_ext + scaled_hist_narrow, MEMBRANE_WIDTH)
 
+        # scaled_result = numerator * signed({1'b0, INV_DENOM}), then >>>16
         scaled_result = wrap_signed(numerator * self.inv_denom, MEMBRANE_WIDTH + 16)
         div_result = scaled_result >> 16
 
@@ -176,12 +135,26 @@ class FractionalGoldenParam:
         )
         next_spike = 1 if next_mem >= THRESHOLD else 0
 
+        # Sequential update order matches RTL
         self.history[self.ptr] = self.mem
         self.ptr = (self.ptr + 1) % self.history_length
         self.mem = next_mem
         self.spike_prev = next_spike
 
         return next_spike, next_mem
+
+
+class FractionalGoldenBaseline(FractionalGolden):
+    """Baseline H=8 golden profile used by the default fractional_lif unit target."""
+
+    def __init__(self):
+        super().__init__(
+            history_length=HISTORY_LENGTH,
+            coeff_frac_bits=COEFF_FRAC_BITS,
+            c_scaled=C_SCALED,
+            inv_denom=INV_DENOM,
+            coeffs_mag=COEFFS_MAG,
+        )
 
 
 def standard_lif_step(mem: int, spike_prev: int, current_qs2_13: int):
@@ -313,14 +286,28 @@ async def test_fractional_vs_standard_lif_pulse_response(dut):
 
 
 @cocotb.test()
-async def test_fractional_lif_matches_fixed_point_golden(dut):
-    """Bit-accurate check against local fixed-point golden model."""
+async def test_fractional_lif_matches_fixed_point_golden_baseline(dut):
+    """
+    Bit-accurate check against baseline local fixed-point golden model.
+
+    This test is intentionally for the baseline H=8 profile only. The local
+    `FractionalGoldenBaseline` model uses fixed H=8 coefficient assumptions
+    (`COEFFS_MAG`) and baseline constants from this file.
+    """
+    history_len = int(dut.HISTORY_LENGTH.value)
+    if history_len != 8:
+        cocotb.log.info(
+            "Skipping baseline golden test "
+            f"(HISTORY_LENGTH={history_len}, expected 8)."
+        )
+        return
+
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
 
-    golden = FractionalGolden()
+    golden = FractionalGoldenBaseline()
 
     stimulus_f = [0.35, 0.0, 0.8, 0.0, 0.0, 0.2, 1.2, 0.0, 0.5, 0.5, -0.1, 0.0]
     stimulus = [float_to_fixed_qs2_13(x) for x in stimulus_f]
@@ -338,12 +325,17 @@ async def test_fractional_lif_matches_fixed_point_golden(dut):
 
 
 @cocotb.test()
-async def test_fractional_lif_matches_fixed_point_golden_integration_params(dut):
-    """Bit-accurate check for integration-time parameter set (H=64, INV_DENOM=58988)."""
+async def test_fractional_lif_matches_fixed_point_golden_hist64(dut):
+    """
+    Bit-accurate check for the H=64 variant parameter profile.
+
+    This test is intentionally for H=64 runs (e.g., `fractional_lif_hist64`) and
+    uses the corresponding H=64 coefficient file plus DUT-provided constants.
+    """
     history_len = int(dut.HISTORY_LENGTH.value)
     if history_len != 64:
         cocotb.log.info(
-            f"Skipping integration-params equivalence test (HISTORY_LENGTH={history_len}, expected 64)."
+            f"Skipping hist64 equivalence test (HISTORY_LENGTH={history_len}, expected 64)."
         )
         return
 
@@ -355,7 +347,7 @@ async def test_fractional_lif_matches_fixed_point_golden_integration_params(dut)
     coeff_file = Path("weights/fractional_order/gl_coefficients.mem")
     coeffs_mag = load_coeffs_mem(coeff_file, history_len - 1)
 
-    golden = FractionalGoldenParam(
+    golden = FractionalGolden(
         history_length=history_len,
         coeff_frac_bits=int(dut.COEFF_FRAC_BITS.value),
         c_scaled=int(dut.C_SCALED.value),
@@ -391,9 +383,9 @@ async def test_fractional_lif_matches_fixed_point_golden_integration_params(dut)
         exp_spk, exp_mem = golden.step(i_val)
         got_spk, got_mem = await step_dut(dut, i_val)
 
-        assert got_spk == exp_spk, (
-            f"[H64] Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
-        )
-        assert got_mem == exp_mem, (
-            f"[H64] Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
-        )
+        assert (
+            got_spk == exp_spk
+        ), f"[H64] Spike mismatch at t={t}: got={got_spk}, exp={exp_spk}"
+        assert (
+            got_mem == exp_mem
+        ), f"[H64] Mem mismatch at t={t}: got={got_mem}, exp={exp_mem}"
