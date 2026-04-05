@@ -169,6 +169,7 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
         COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
         COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        # FC2 output transport width must be wide enough to avoid clipping before FC_OUT; 24 bits is the smallest stable value observed for this profile.
         COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=64
         COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
@@ -186,6 +187,7 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
         COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
         COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        # Same FC2 sizing rule as hist64: keep enough headroom to prevent saturation in observation sweeps.
         COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=8
         COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
@@ -269,6 +271,7 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
         COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
         COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        # FC2 output transport width must be wide enough to avoid clipping before FC_OUT; 24 bits is the smallest stable value observed for this profile.
         COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -GHISTORY_LENGTH=64
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
@@ -286,6 +289,7 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
         COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
         COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        # Same FC2 sizing rule as hist64: keep enough headroom to prevent saturation in observation sweeps.
         COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
         COMPILE_ARGS += -GHISTORY_LENGTH=8
         COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15

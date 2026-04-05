@@ -159,6 +159,39 @@ The cocotb tests provide two fractional integration targets in `tests/Makefile`:
 
 For the generalized history-8 model, use `test_cartpole_integration_fractional_hist8`.
 
+### Determining `FC2_OUTPUT_WIDTH`
+
+`FC2_OUTPUT_WIDTH` is the transport width used for the FC2 layer output before it is consumed by FC_OUT.
+If this width is too small, FC2 values clip/saturate and policy behavior can collapse even when earlier layers look healthy.
+
+#### Why this parameter matters
+
+- Fractional models can produce larger FC2 dynamic range than expected from nominal observation bounds.
+- Clipping in FC2 can silently distort action logits and produce stable but wrong action choices.
+- The failure mode is often distribution-dependent, so simple smoke tests can miss it.
+
+#### Practical sizing workflow
+
+1. Start from an analytical estimate:
+   - Bound FC2 accumulation from quantized FC1 activations and FC2 weights.
+   - Add margin for bias and worst-case alignment of signs.
+2. Choose the smallest candidate width that should cover that bound.
+3. Validate in cocotb using observation sweeps and saturation counters.
+4. Increase width until FC2 saturation counters remain zero in the sweep/regression set.
+
+#### Current project setting
+
+For both fractional integration profiles currently in `sv/cocotb/tests/Makefile`:
+
+- `cartpole_integration_fractional` (history length 64)
+- `cartpole_integration_fractional_hist8` (history length 8)
+
+`FC2_OUTPUT_WIDTH=24` is used as the smallest width that remained stable in the saturation-focused integration checks.
+
+#### Validation recommendation
+
+When changing quantization, weights, or fractional constants, re-run the FC2 saturation check in cocotb and treat any non-zero saturation count as a width/regime mismatch requiring re-sizing.
+
 ## Recommended Commands (History-8)
 
 Run from `cocotb/tests` inside container.
