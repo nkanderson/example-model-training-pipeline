@@ -1,15 +1,18 @@
 # Makefile for running cocotb tests on SNN modules
 #
 # Usage:
-#   make                             # Run LIF tests (default)
-#   make test_lif                    # Run LIF (single-step) tests
-#   make test_lif_timestep           # Run LIF with internal timestep loop tests
-#   make test_linear_layer           # Run linear_layer tests
-#   make test_spike_buffer           # Run spike_buffer tests
-#   make test_spike_buffer_staggered # Run spike_buffer_staggered tests (legacy)
-#   make test_membrane_buffer        # Run membrane_buffer tests
-#   make test_neuron_membrane_buffer # Run neuron_membrane_buffer tests
-#   make clean                       # Clean build artifacts
+#   make                                 # Run LIF tests (default)
+#   make test_lif                        # Run LIF (single-step) tests
+#   make test_fractional_lif             # Run fractional_lif (single-step) tests
+#   make test_lif_timestep               # Run LIF with internal timestep loop tests
+#   make test_linear_layer               # Run linear_layer tests
+#   make test_spike_buffer               # Run spike_buffer tests
+#   make test_spike_buffer_staggered     # Run spike_buffer_staggered tests (legacy)
+#   make test_membrane_buffer            # Run membrane_buffer tests
+#   make test_neuron_membrane_buffer     # Run neuron_membrane_buffer tests
+#   make cartpole_integration            # Run cartpole_integration tests
+#   make cartpole_integration_fractional # Run cartpole_integration_fractional tests
+#   make clean                           # Clean build artifacts
 
 # Default test module
 TEST ?= lif
@@ -23,6 +26,14 @@ else ifeq ($(TEST),lif_timestep)
     VERILOG_SOURCES = $(PWD)/../sv/lif_timestep.sv
     TOPLEVEL = lif_timestep
     MODULE = test_lif_timestep
+else ifeq ($(TEST),fractional_lif)
+    VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
+    TOPLEVEL = fractional_lif
+    MODULE = test_fractional_lif
+else ifeq ($(TEST),fractional_lif_hist64)
+    VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
+    TOPLEVEL = fractional_lif
+    MODULE = test_fractional_lif
 else ifeq ($(TEST),linear_layer)
     VERILOG_SOURCES = $(PWD)/../sv/linear_layer.sv
     TOPLEVEL = linear_layer
@@ -64,8 +75,26 @@ else ifeq ($(TEST),cartpole_integration)
                       $(PWD)/../sv/q_accumulator.sv
     TOPLEVEL = neural_network
     MODULE = test_cartpole_integration
+else ifeq ($(TEST),cartpole_integration_fractional)
+    # Full model integration test with gymnasium using fractional LIF neurons
+    VERILOG_SOURCES = $(PWD)/../sv/neural_network_fractional.sv \
+                      $(PWD)/../sv/linear_layer.sv \
+                      $(PWD)/../sv/fractional_lif.sv \
+                      $(PWD)/../sv/neuron_membrane_buffer.sv \
+                      $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = neural_network_fractional
+    MODULE = test_cartpole_integration
+else ifeq ($(TEST),cartpole_integration_fractional_hist8)
+    # Full model integration test with gymnasium using fractional LIF neurons (history_length=8)
+    VERILOG_SOURCES = $(PWD)/../sv/neural_network_fractional.sv \
+                      $(PWD)/../sv/linear_layer.sv \
+                      $(PWD)/../sv/fractional_lif.sv \
+                      $(PWD)/../sv/neuron_membrane_buffer.sv \
+                      $(PWD)/../sv/q_accumulator.sv
+    TOPLEVEL = neural_network_fractional
+    MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', or 'cartpole_integration')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_hist64', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', or 'cartpole_integration_fractional_hist8')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -87,6 +116,18 @@ ifeq ($(SIM),icarus)
     endif
     ifeq ($(TEST),spike_buffer_staggered)
         COMPILE_ARGS += -Pspike_buffer_staggered.NUM_NEURONS=8 -Pspike_buffer_staggered.NUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),fractional_lif)
+        COMPILE_ARGS += -Pfractional_lif.HISTORY_LENGTH=8
+        COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
+    endif
+    ifeq ($(TEST),fractional_lif_hist64)
+				# Match params from fractional_constants.txt for original 64-16 model
+        COMPILE_ARGS += -Pfractional_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pfractional_lif.C_SCALED=256 -Pfractional_lif.INV_DENOM=58988
+        COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
@@ -123,6 +164,42 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pneural_network.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fc_out_weights.mem\"
         COMPILE_ARGS += -Pneural_network.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fc_out_bias.mem\"
     endif
+    ifeq ($(TEST),cartpole_integration_fractional)
+        # Fractional model from weights/fractional_order: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
+        COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        # FC2 output transport width must be wide enough to avoid clipping before FC_OUT; 24 bits is the smallest stable value observed for this profile.
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pneural_network_fractional.C_SCALED=256 -Pneural_network_fractional.INV_DENOM=58988
+        COMPILE_ARGS += -Pneural_network_fractional.GL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc1_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc1_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc2_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc2_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc_out_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc_out_bias.mem\"
+    endif
+    ifeq ($(TEST),cartpole_integration_fractional_hist8)
+        # Fractional model with history_length=8 from weights/fractional_hist8: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_INPUTS=4 -Pneural_network_fractional.HL1_SIZE=32
+        COMPILE_ARGS += -Pneural_network_fractional.HL2_SIZE=16 -Pneural_network_fractional.NUM_ACTIONS=2
+        COMPILE_ARGS += -Pneural_network_fractional.NUM_TIMESTEPS=30 -Pneural_network_fractional.Q_BATCH_SIZE=4
+        # Same FC2 sizing rule as hist64: keep enough headroom to prevent saturation in observation sweeps.
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -Pneural_network_fractional.HISTORY_LENGTH=8
+        COMPILE_ARGS += -Pneural_network_fractional.COEFF_WIDTH=16 -Pneural_network_fractional.COEFF_FRAC_BITS=15
+        COMPILE_ARGS += -Pneural_network_fractional.C_SCALED=256 -Pneural_network_fractional.INV_DENOM=61388
+        COMPILE_ARGS += -Pneural_network_fractional.GL_COEFF_FILE=\"$(PWD)/weights/fractional_hist8/gl_coefficients.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC1_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC2_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_bias.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_weights.mem\"
+        COMPILE_ARGS += -Pneural_network_fractional.FC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_bias.mem\"
+    endif
 endif
 
 # Verilator should be used when needing to trace unpacked arrays
@@ -141,6 +218,18 @@ ifeq ($(SIM),verilator)
     endif
     ifeq ($(TEST),spike_buffer_staggered)
         COMPILE_ARGS += -GNUM_NEURONS=8 -GNUM_TIMESTEPS=4
+    endif
+    ifeq ($(TEST),fractional_lif)
+        COMPILE_ARGS += -GHISTORY_LENGTH=8
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_gl_coeffs_h8.mem\"
+    endif
+    ifeq ($(TEST),fractional_lif_hist64)
+				# Match params from fractional_constants.txt for original 64-16 model
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58988
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=3
@@ -177,6 +266,42 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fc_out_weights.mem\"
         COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fc_out_bias.mem\"
     endif
+    ifeq ($(TEST),cartpole_integration_fractional)
+        # Fractional model from weights/fractional_order: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
+        COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
+        COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        # FC2 output transport width must be wide enough to avoid clipping before FC_OUT; 24 bits is the smallest stable value observed for this profile.
+        COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58988
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
+        COMPILE_ARGS += -GFC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc1_weights.mem\"
+        COMPILE_ARGS += -GFC1_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc1_bias.mem\"
+        COMPILE_ARGS += -GFC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc2_weights.mem\"
+        COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc2_bias.mem\"
+        COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_order/fc_out_weights.mem\"
+        COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_order/fc_out_bias.mem\"
+    endif
+    ifeq ($(TEST),cartpole_integration_fractional_hist8)
+        # Fractional model with history_length=8 from weights/fractional_hist8: 32 HL1, 16 HL2, 30 timesteps
+        COMPILE_ARGS += -GNUM_INPUTS=4 -GHL1_SIZE=32
+        COMPILE_ARGS += -GHL2_SIZE=16 -GNUM_ACTIONS=2
+        COMPILE_ARGS += -GNUM_TIMESTEPS=30 -GQ_BATCH_SIZE=4
+        # Same FC2 sizing rule as hist64: keep enough headroom to prevent saturation in observation sweeps.
+        COMPILE_ARGS += -GFC2_OUTPUT_WIDTH=24
+        COMPILE_ARGS += -GHISTORY_LENGTH=8
+        COMPILE_ARGS += -GCOEFF_WIDTH=16 -GCOEFF_FRAC_BITS=15
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=61388
+        COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_hist8/gl_coefficients.mem\"
+        COMPILE_ARGS += -GFC1_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_weights.mem\"
+        COMPILE_ARGS += -GFC1_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc1_bias.mem\"
+        COMPILE_ARGS += -GFC2_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_weights.mem\"
+        COMPILE_ARGS += -GFC2_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc2_bias.mem\"
+        COMPILE_ARGS += -GFC_OUT_WEIGHTS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_weights.mem\"
+        COMPILE_ARGS += -GFC_OUT_BIAS_FILE=\"$(PWD)/weights/fractional_hist8/fc_out_bias.mem\"
+    endif
 endif
 
 # Output directory for simulation results
@@ -185,6 +310,11 @@ SIM_BUILD = $(RESULTS_DIR)/sim_build
 
 # Export variables for cocotb
 export COCOTB_RESULTS_FILE = $(RESULTS_DIR)/results.xml
+export COCOTB_TEST_MODULES = $(MODULE)
+ifneq ($(origin TESTCASE), undefined)
+    export COCOTB_TESTCASE = $(TESTCASE)
+    undefine TESTCASE
+endif
 
 # Include cocotb's make rules
 include $(shell cocotb-config --makefiles)/Makefile.sim
@@ -192,6 +322,12 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 # Convenience targets
 test_lif:
 	$(MAKE) TEST=lif
+
+test_fractional_lif:
+	$(MAKE) TEST=fractional_lif
+
+test_fractional_lif_hist64:
+	$(MAKE) TEST=fractional_lif_hist64
 
 test_lif_timestep:
 	$(MAKE) TEST=lif_timestep
@@ -220,10 +356,16 @@ test_neural_network:
 test_cartpole_integration:
 	$(MAKE) TEST=cartpole_integration
 
+test_cartpole_integration_fractional:
+	$(MAKE) TEST=cartpole_integration_fractional
+
+test_cartpole_integration_fractional_hist8:
+	$(MAKE) TEST=cartpole_integration_fractional_hist8
+
 # Clean up generated files
 clean::
 	rm -rf $(RESULTS_DIR)/*
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network
+.PHONY: clean test_lif test_fractional_lif test_fractional_lif_hist64 test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8

@@ -125,6 +125,116 @@ docker compose down
 | `test_linear_layer_multiple_runs` | Module can be started multiple times |
 | `test_linear_layer_timing` | Verifies NUM_OUTPUTS valid outputs in correct timing |
 
+### Fractional LIF Golden Tests (`test_fractional_lif.py`)
+
+The file includes two bit-accurate golden checks with intentional profile gating:
+
+- `test_fractional_lif_matches_fixed_point_golden_baseline`
+    - Runs only for baseline H=8 profile (e.g., `make test_fractional_lif`)
+    - Skips when `HISTORY_LENGTH != 8`
+- `test_fractional_lif_matches_fixed_point_golden_hist64`
+    - Runs only for H=64 variant profile (e.g., `make test_fractional_lif_hist64`)
+    - Skips when `HISTORY_LENGTH != 64`
+
+This avoids false failures from comparing H=8 assumptions against H=64 settings (and vice versa).
+
+### CartPole Integration Tests (`test_cartpole_integration.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_cartpole_single_episode` | Runs one CartPole episode with hardware policy |
+| `test_cartpole_multiple_episodes` | Runs 10 episodes + repeatability check |
+| `test_inference_state_leakage` | Repeats fixed observation to detect state carryover |
+| `test_cartpole_action_trace` | Writes per-step hardware action trace CSV (**FULL_DEBUG only**) |
+| `test_cartpole_timestep_snapshots` | Writes per-cycle FC2/HL2/Q snapshot CSV (**FULL_DEBUG only**) |
+
+For software-vs-hardware trace comparison workflow (`export_action_trace.py` / `compare_action_traces.py`), see `../../train/README.md`.
+
+## Fractional CartPole Targets
+
+The cocotb tests provide two fractional integration targets in `tests/Makefile`:
+
+- `test_cartpole_integration_fractional` → history length 64 (`weights/fractional_order`)
+- `test_cartpole_integration_fractional_hist8` → history length 8 (`weights/fractional_hist8`)
+
+For the generalized history-8 model, use `test_cartpole_integration_fractional_hist8`.
+
+### Determining `FC2_OUTPUT_WIDTH`
+
+`FC2_OUTPUT_WIDTH` is the transport width used for the FC2 layer output before it is consumed by FC_OUT.
+If this width is too small, FC2 values clip/saturate and policy behavior can collapse even when earlier layers look healthy.
+
+#### Why this parameter matters
+
+- Fractional models can produce larger FC2 dynamic range than expected from nominal observation bounds.
+- Clipping in FC2 can silently distort action logits and produce stable but wrong action choices.
+- The failure mode is often distribution-dependent, so simple smoke tests can miss it.
+
+#### Practical sizing workflow
+
+1. Start from an analytical estimate:
+   - Bound FC2 accumulation from quantized FC1 activations and FC2 weights.
+   - Add margin for bias and worst-case alignment of signs.
+2. Choose the smallest candidate width that should cover that bound.
+3. Validate in cocotb using observation sweeps and saturation counters.
+4. Increase width until FC2 saturation counters remain zero in the sweep/regression set.
+
+#### Current project setting
+
+For both fractional integration profiles currently in `sv/cocotb/tests/Makefile`:
+
+- `cartpole_integration_fractional` (history length 64)
+- `cartpole_integration_fractional_hist8` (history length 8)
+
+`FC2_OUTPUT_WIDTH=24` is used as the smallest width that remained stable in the saturation-focused integration checks.
+
+#### Validation recommendation
+
+When changing quantization, weights, or fractional constants, re-run the FC2 saturation check in cocotb and treat any non-zero saturation count as a width/regime mismatch requiring re-sizing.
+
+## Recommended Commands (History-8)
+
+Run from `cocotb/tests` inside container.
+
+```bash
+# 1) Multi-episode pass/fail performance check
+make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_multiple_episodes
+
+# 2) Snapshot export for low-level diagnostics
+FULL_DEBUG=1 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
+
+# 3) Analyze snapshots
+python analyze_timestep_snapshots.py --csv ../results/cartpole_timestep_snapshots_hw.csv
+```
+
+## Snapshot Debug Modes
+
+Debug CSV export tests (`test_cartpole_action_trace`, `test_cartpole_timestep_snapshots`) only run when `FULL_DEBUG=1`.
+
+`test_cartpole_timestep_snapshots`:
+    - Runs export and captures FC2 stream, HL2 summaries, FC2 saturation counters, plus HL1/Q probe fields.
+    - May be followed by running the `analyze_timestep_snapshots.py` script
+
+Backward compatibility: `SNAPSHOT_FULL_DEBUG` is still accepted as a fallback.
+
+Example full-debug run:
+
+```bash
+FULL_DEBUG=1 make clean && make test_cartpole_integration_fractional_hist8 SIM=icarus TESTCASE=test_cartpole_timestep_snapshots
+```
+
+## What to Look For in Snapshot Analysis
+
+- `fc2_saturation` line:
+    - Healthy run should show near-zero saturation events for FC2.
+    - Large `pos_events`/`neg_events` indicates FC2 clipping and likely policy collapse.
+- `action=` across inferences:
+    - Constant action with low rewards usually indicates lost dynamic range.
+- `fc2_count_mismatches` / `fc2_index_coverage_issues`:
+    - Should be zero; non-zero indicates sequencing/indexing bugs.
+- `obs_fixed` vs early FC2/HL2 response:
+    - Different observations should induce different downstream responses.
+
 ## Fixed-Point Format
 
 The LIF neuron uses **QS2.13** fixed-point format:

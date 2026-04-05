@@ -1,4 +1,5 @@
 import argparse
+import csv
 import math
 import os
 import yaml
@@ -202,6 +203,19 @@ if __name__ == "__main__":
         help="Maximum steps per CartPole episode (default: 500)",
     )
 
+    parser.add_argument(
+        "--save-plot-image",
+        action="store_true",
+        help="Save final training plot image (default: disabled; metrics CSV is always saved)",
+    )
+
+    parser.add_argument(
+        "--metrics-csv",
+        type=str,
+        default=None,
+        help="Optional path for training metrics CSV output",
+    )
+
     args = parser.parse_args()
 
     # Determine config file to use
@@ -234,6 +248,10 @@ if __name__ == "__main__":
         tau = config["training"]["tau"]
         lr = config["training"]["lr"]
         num_episodes = config["training"]["num_episodes"]
+        eval_every_episodes = config["training"].get("eval_every_episodes", 0)
+        eval_num_episodes = config["training"].get("eval_num_episodes", 10)
+        eval_seed_base = config["training"].get("eval_seed_base", 42)
+        eval_seed_stride = config["training"].get("eval_seed_stride", 7)
 
         num_steps = config["snn"]["num_steps"]
         beta = config["snn"]["beta"]
@@ -277,6 +295,10 @@ if __name__ == "__main__":
         tau = 0.005
         lr = 0.0003
         num_episodes = 600
+        eval_every_episodes = 0
+        eval_num_episodes = 10
+        eval_seed_base = 42
+        eval_seed_stride = 7
 
         num_steps = 30
         beta = 0.9
@@ -296,6 +318,8 @@ if __name__ == "__main__":
     hw_acceleration = args.hw_acceleration
     human_render = args.human_render
     max_episode_steps = args.max_episode_steps
+    save_plot_image = args.save_plot_image
+    metrics_csv_arg = args.metrics_csv
 
     # Create surrogate gradient function
     spike_grad = surrogate.fast_sigmoid(slope=surrogate_gradient_slope)
@@ -323,6 +347,7 @@ if __name__ == "__main__":
 
     # Training parameters
     best_avg_reward = 0
+    best_eval_avg_reward = 0
 
     # Create models directory if it doesn't exist
     models_dir = Path("models")
@@ -331,6 +356,15 @@ if __name__ == "__main__":
     # Generate model filenames based on config name
     best_model_filename = str(models_dir / f"dqn_{config_name}-best.pth")
     final_model_filename = str(models_dir / f"dqn_{config_name}-final.pth")
+
+    # Metrics logging path (CSV)
+    metrics_dir = Path("metrics")
+    metrics_dir.mkdir(exist_ok=True)
+    metrics_csv_path = (
+        Path(metrics_csv_arg)
+        if metrics_csv_arg is not None
+        else metrics_dir / f"dqn_{config_name}-training-metrics.csv"
+    )
 
     #
     # Section 2: Initialize replay memory and create the CartPole environment
@@ -452,9 +486,13 @@ if __name__ == "__main__":
                     f"history_length={agent.history_length}, dt={agent.dt}"
                 )
             print(f"Resuming from episode {start_episode} (prev avg: {prev_avg:.2f})")
-            print(f"Running evaluation for {num_episodes} episodes")
+            eval_seeds = [eval_seed_base + i * eval_seed_stride for i in range(10)]
+            print(f"Running evaluation for 10 episodes with fixed seeds: {eval_seeds}")
             episode_rewards, avg_reward = agent.evaluate(
-                env, num_episodes=10, render=True
+                env,
+                num_episodes=10,
+                render=True,
+                seeds=eval_seeds,
             )
             print("Evaluation complete. Exiting.")
             env.close()
@@ -530,6 +568,28 @@ if __name__ == "__main__":
         )
     print(f"Training for {num_episodes} episodes")
 
+    # Initialize per-episode metrics CSV (overwrite for a fresh run)
+    with open(metrics_csv_path, "w", newline="") as metrics_file:
+        writer = csv.DictWriter(
+            metrics_file,
+            fieldnames=[
+                "episode",
+                "episode_steps",
+                "episode_reward",
+                "epsilon",
+                "running_avg_100",
+                "generalization_avg",
+                "generalization_seeds",
+                "best_running_avg_100",
+                "best_generalization_avg",
+                "saved_best_running_model",
+                "saved_best_generalization_model",
+            ],
+        )
+        writer.writeheader()
+
+    last_generalization_avg = None
+
     #
     # Section 4: Main training loop
     #
@@ -591,6 +651,11 @@ if __name__ == "__main__":
                 #         target_buf.copy_(policy_buf)
 
             if done:
+                episode_steps = t + 1
+                episode_reward = float(episode_steps)
+                eps_threshold = eps_end + (eps_start - eps_end) * math.exp(
+                    -1.0 * steps_done / eps_decay
+                )
                 episode_durations.append(t + 1)
                 if human_render:
                     plot_durations(
@@ -598,6 +663,8 @@ if __name__ == "__main__":
                     )  # Only update plot live if human_render is enabled
 
                 # Check if this is the best model so far (save only when we beat the record)
+                recent_avg = None
+                saved_best_running_model = False
                 if len(episode_durations) >= 100:
                     recent_avg = sum(episode_durations[-100:]) / 100
                     if recent_avg > best_avg_reward:
@@ -607,6 +674,80 @@ if __name__ == "__main__":
                         agent.avg_reward = recent_avg
                         agent.save(best_model_filename)
                         print(f"New best model saved! Avg reward: {recent_avg:.2f}")
+                        saved_best_running_model = True
+
+                # Optional fixed-seed evaluation for generalization-based model selection
+                saved_best_generalization_model = False
+                eval_seeds = []
+                current_episode = i_episode - start_episode + 1
+                if eval_every_episodes > 0 and (
+                    current_episode % eval_every_episodes == 0
+                ):
+                    eval_seeds = [
+                        eval_seed_base + i * eval_seed_stride
+                        for i in range(eval_num_episodes)
+                    ]
+                    _, eval_avg = agent.evaluate(
+                        env,
+                        num_episodes=eval_num_episodes,
+                        render=False,
+                        seeds=eval_seeds,
+                    )
+                    last_generalization_avg = eval_avg
+                    print(
+                        f"Generalization eval @ episode {i_episode}: avg={eval_avg:.2f} on seeds={eval_seeds}"
+                    )
+
+                    if eval_avg > best_eval_avg_reward:
+                        best_eval_avg_reward = eval_avg
+                        agent.episode = i_episode
+                        agent.avg_reward = eval_avg
+                        generalization_best_model = (
+                            models_dir / f"dqn_{config_name}-best-generalization.pth"
+                        )
+                        agent.save(generalization_best_model)
+                        print(
+                            f"New best generalization model saved! Avg reward: {eval_avg:.2f}"
+                        )
+                        saved_best_generalization_model = True
+
+                # Append one row of metrics per training episode
+                with open(metrics_csv_path, "a", newline="") as metrics_file:
+                    writer = csv.DictWriter(
+                        metrics_file,
+                        fieldnames=[
+                            "episode",
+                            "episode_steps",
+                            "episode_reward",
+                            "epsilon",
+                            "running_avg_100",
+                            "generalization_avg",
+                            "generalization_seeds",
+                            "best_running_avg_100",
+                            "best_generalization_avg",
+                            "saved_best_running_model",
+                            "saved_best_generalization_model",
+                        ],
+                    )
+                    writer.writerow(
+                        {
+                            "episode": i_episode,
+                            "episode_steps": episode_steps,
+                            "episode_reward": episode_reward,
+                            "epsilon": eps_threshold,
+                            "running_avg_100": recent_avg,
+                            "generalization_avg": last_generalization_avg,
+                            "generalization_seeds": (
+                                "|".join(map(str, eval_seeds)) if eval_seeds else ""
+                            ),
+                            "best_running_avg_100": best_avg_reward,
+                            "best_generalization_avg": best_eval_avg_reward,
+                            "saved_best_running_model": int(saved_best_running_model),
+                            "saved_best_generalization_model": int(
+                                saved_best_generalization_model
+                            ),
+                        }
+                    )
 
                 break
 
@@ -627,16 +768,20 @@ if __name__ == "__main__":
         print(
             f"Best model saved to: {best_model_filename} (avg reward: {best_avg_reward:.2f})"
         )
+    if best_eval_avg_reward > 0:
+        print(f"Best generalization model avg reward: {best_eval_avg_reward:.2f}")
 
-    if human_render:
-        plt.ioff()  # Turn off interactive mode
-    plot_durations(episode_durations, show_result=True)  # Always show final result
+    print(f"Training metrics CSV saved to: {metrics_csv_path}")
 
-    # Save plot to file (works in headless mode), and show if display is available
-    plot_filename = f"images/{config_name}.png"
-    Path("images").mkdir(exist_ok=True)
-    plt.savefig(plot_filename)
-    print(f"Training plot saved to: {plot_filename}")
+    if save_plot_image:
+        if human_render:
+            plt.ioff()  # Turn off interactive mode
+        plot_durations(episode_durations, show_result=True)
 
-    if os.environ.get("DISPLAY") or human_render:
-        plt.show()
+        plot_filename = f"images/{config_name}.png"
+        Path("images").mkdir(exist_ok=True)
+        plt.savefig(plot_filename)
+        print(f"Training plot saved to: {plot_filename}")
+
+        if os.environ.get("DISPLAY") or human_render:
+            plt.show()

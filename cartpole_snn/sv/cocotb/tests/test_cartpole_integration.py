@@ -17,6 +17,8 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
 
+import csv
+import os
 import gymnasium as gym
 import numpy as np
 
@@ -34,6 +36,7 @@ HL1_SIZE = 64
 HL2_SIZE = 16
 NUM_ACTIONS = 2
 NUM_TIMESTEPS = 30
+FULL_DEBUG = os.getenv("FULL_DEBUG", os.getenv("SNAPSHOT_FULL_DEBUG", "0")) == "1"
 
 
 def float_to_fixed(value: float) -> int:
@@ -48,11 +51,12 @@ def float_to_fixed(value: float) -> int:
     return scaled
 
 
-def fixed_to_float(value: int) -> float:
-    """Convert fixed-point (unsigned representation) to float."""
-    if value >= 2 ** (TOTAL_BITS - 1):
-        value = value - UNSIGNED_RANGE
-    return value / SCALE_FACTOR
+def to_signed(value: int, bits: int) -> int:
+    mask = (1 << bits) - 1
+    value &= mask
+    if value >= (1 << (bits - 1)):
+        value -= 1 << bits
+    return value
 
 
 async def reset_dut(dut):
@@ -101,6 +105,387 @@ async def run_inference(
     action = int(dut.selected_action.value)
 
     return action
+
+
+async def run_inference_with_trace(
+    dut, observations: np.ndarray, timeout_cycles: int = 50000
+) -> tuple[int, dict]:
+    """Run one inference and return action plus traceable internal summaries."""
+    action = await run_inference(dut, observations, timeout_cycles=timeout_cycles)
+
+    hl2_vals = []
+    for i in range(HL2_SIZE):
+        raw = int(dut.hl2_membranes[i].value)
+        hl2_vals.append(to_signed(raw, 24))
+
+    q0 = ""
+    q1 = ""
+    try:
+        q0 = int(dut.q_accum.q_divided["0"].value)
+        q1 = int(dut.q_accum.q_divided["1"].value)
+    except Exception:
+        pass
+
+    trace = {
+        "q0": q0,
+        "q1": q1,
+        "hl2_mem_mean": float(np.mean(hl2_vals)) if hl2_vals else "",
+        "hl2_mem_max": int(np.max(hl2_vals)) if hl2_vals else "",
+        "hl2_mem_min": int(np.min(hl2_vals)) if hl2_vals else "",
+    }
+
+    return action, trace
+
+
+def _trace_signature(action: int, trace: dict) -> tuple[int, int, int]:
+    """Return stable integer signature for repeatability checks."""
+    q0 = trace.get("q0", "")
+    q1 = trace.get("q1", "")
+    return (
+        action,
+        int(q0) if q0 != "" else 0,
+        int(q1) if q1 != "" else 0,
+    )
+
+
+async def run_episode_trace(dut, env, seed: int, max_steps: int = 500):
+    """Run one episode and return list of per-step action records."""
+    await reset_dut(dut)
+    observation, _ = env.reset(seed=seed)
+    records = []
+
+    for step in range(max_steps):
+        action, trace = await run_inference_with_trace(dut, observation)
+        records.append(
+            {
+                "seed": seed,
+                "step": step,
+                "action": action,
+                "q0": trace["q0"],
+                "q1": trace["q1"],
+                "hl2_mem_mean": trace["hl2_mem_mean"],
+                "hl2_mem_max": trace["hl2_mem_max"],
+                "hl2_mem_min": trace["hl2_mem_min"],
+                "obs0": float(observation[0]),
+                "obs1": float(observation[1]),
+                "obs2": float(observation[2]),
+                "obs3": float(observation[3]),
+            }
+        )
+
+        observation, _, terminated, truncated, _ = env.step(action)
+        if terminated or truncated:
+            break
+
+    return records
+
+
+def _safe_int(value_obj, bits: int | None = None):
+    """Best-effort integer conversion for internal probe signals."""
+    try:
+        value = int(value_obj.value)
+        if bits is not None:
+            value = to_signed(value, bits)
+        return value
+    except Exception:
+        return ""
+
+
+def _safe_array_int(parent_obj, array_name: str, idx: int, bits: int | None = None):
+    """Best-effort read for internal array elements across simulator handle styles."""
+    try:
+        arr = getattr(parent_obj, array_name)
+    except Exception:
+        return ""
+
+    for key in (idx, str(idx), f"[{idx}]"):
+        try:
+            value = int(arr[key].value)
+            if bits is not None:
+                value = to_signed(value, bits)
+            return value
+        except Exception:
+            pass
+
+    for alt_name in (f"{array_name}[{idx}]", f"{array_name}_{idx}"):
+        try:
+            value = int(getattr(parent_obj, alt_name).value)
+            if bits is not None:
+                value = to_signed(value, bits)
+            return value
+        except Exception:
+            pass
+
+    return ""
+
+
+def _safe_hl1_spike_count(dut):
+    """Best-effort count of HL1 spikes at current cycle."""
+    try:
+        count = 0
+        num_hl1 = len(dut.hl1_spikes)
+        for i in range(num_hl1):
+            count += int(dut.hl1_spikes[i].value)
+        return count
+    except Exception:
+        return ""
+
+
+def _safe_hl1_sample(dut, sample_size: int = 8) -> tuple[str, str]:
+    """Capture small HL1 current/spike samples for timestep-0 sensitivity checks."""
+    try:
+        num_curr = len(dut.hl1_currents)
+        num_spk = len(dut.hl1_spikes)
+        sample_n = min(sample_size, num_curr, num_spk)
+
+        currents = []
+        spikes = []
+        for i in range(sample_n):
+            curr = _safe_array_int(dut, "hl1_currents", i, bits=TOTAL_BITS)
+            spk = _safe_array_int(dut, "hl1_spikes", i)
+            currents.append("" if curr == "" else str(curr))
+            spikes.append("" if spk == "" else str(spk))
+
+        return ";".join(currents), ";".join(spikes)
+    except Exception:
+        return "", ""
+
+
+async def run_inference_with_timestep_snapshots(
+    dut,
+    observations: np.ndarray,
+    inference_idx: int,
+    full_debug: bool = False,
+    timeout_cycles: int = 50000,
+) -> tuple[int, list[dict]]:
+    """Run one inference and collect fc2/HL2/Q snapshots during execution."""
+    obs_floats = [float(observations[i]) for i in range(NUM_INPUTS)]
+    obs_fixed = [float_to_fixed(v) for v in obs_floats]
+
+    for i in range(NUM_INPUTS):
+        dut.observations[i].value = obs_fixed[i]
+
+    dut.start.value = 1
+    await RisingEdge(dut.clk)
+    dut.start.value = 0
+
+    records = []
+    cycle = 0
+    last_q_timestep = None
+    hl1_t0_curr_sample = ""
+    hl1_t0_spike_sample = ""
+    fc2_sat_pos_count = 0
+    fc2_sat_neg_count = 0
+
+    for cycle in range(timeout_cycles):
+        await RisingEdge(dut.clk)
+
+        if int(dut.fc2_output_valid.value) == 1:
+            ts = int(dut.current_timestep.value)
+            fc2_idx = int(dut.fc2_output_idx.value)
+            fc2_raw = int(dut.fc2_output_current.value)
+            fc2_bits = len(dut.fc2_output_current)
+            fc2_signed = to_signed(fc2_raw, fc2_bits)
+            fc2_sat_pos = _safe_int(dut.fc2.sat_pos)
+            fc2_sat_neg = _safe_int(dut.fc2.sat_neg)
+            if fc2_sat_pos != "":
+                fc2_sat_pos_count += int(fc2_sat_pos)
+            if fc2_sat_neg != "":
+                fc2_sat_neg_count += int(fc2_sat_neg)
+
+            if full_debug and ts == 0 and fc2_idx == 0 and hl1_t0_curr_sample == "":
+                hl1_t0_curr_sample, hl1_t0_spike_sample = _safe_hl1_sample(dut)
+
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "fc2_stream",
+                    "timestep": ts,
+                    "fc2_idx": fc2_idx,
+                    "fc2_raw": fc2_raw,
+                    "fc2_signed": fc2_signed,
+                    "fc2_float": fc2_signed / SCALE_FACTOR,
+                    "fc2_sat_pos": fc2_sat_pos,
+                    "fc2_sat_neg": fc2_sat_neg,
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
+                    "hl2_mem_mean": "",
+                    "hl2_mem_max": "",
+                    "hl2_mem_min": "",
+                    "q_read_timestep": "",
+                    "q_state": "",
+                    "q_accum0": "",
+                    "q_accum1": "",
+                    "q_div0": "",
+                    "q_div1": "",
+                    "selected_action": "",
+                }
+            )
+
+        if int(dut.fc2_done.value) == 1:
+            ts = int(dut.current_timestep.value)
+            hl2_mem_vals = [
+                to_signed(int(dut.hl2_membranes[i].value), 24) for i in range(HL2_SIZE)
+            ]
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "timestep_summary",
+                    "timestep": ts,
+                    "fc2_idx": "",
+                    "fc2_raw": "",
+                    "fc2_signed": "",
+                    "fc2_float": "",
+                    "fc2_sat_pos": "",
+                    "fc2_sat_neg": "",
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
+                    "hl2_mem_mean": (
+                        float(np.mean(hl2_mem_vals)) if hl2_mem_vals else ""
+                    ),
+                    "hl2_mem_max": int(np.max(hl2_mem_vals)) if hl2_mem_vals else "",
+                    "hl2_mem_min": int(np.min(hl2_mem_vals)) if hl2_mem_vals else "",
+                    "q_read_timestep": _safe_int(dut.q_read_timestep),
+                    "q_state": _safe_int(dut.q_accum.state),
+                    "q_accum0": _safe_array_int(dut.q_accum, "q_accum", 0),
+                    "q_accum1": _safe_array_int(dut.q_accum, "q_accum", 1),
+                    "q_div0": _safe_array_int(dut.q_accum, "q_divided", 0),
+                    "q_div1": _safe_array_int(dut.q_accum, "q_divided", 1),
+                    "selected_action": "",
+                }
+            )
+
+        q_state = _safe_int(dut.q_accum.state)
+        q_ts = _safe_int(dut.q_accum.timestep_counter)
+        if q_state != "" and q_state != 0 and q_ts != "" and q_ts != last_q_timestep:
+            records.append(
+                {
+                    "inference": inference_idx,
+                    "cycle": cycle,
+                    "stage": "q_progress",
+                    "timestep": "",
+                    "fc2_idx": "",
+                    "fc2_raw": "",
+                    "fc2_signed": "",
+                    "fc2_float": "",
+                    "fc2_sat_pos": "",
+                    "fc2_sat_neg": "",
+                    "fc2_sat_pos_count": fc2_sat_pos_count,
+                    "fc2_sat_neg_count": fc2_sat_neg_count,
+                    "obs0": obs_floats[0],
+                    "obs1": obs_floats[1],
+                    "obs2": obs_floats[2],
+                    "obs3": obs_floats[3],
+                    "obs0_fixed": obs_fixed[0],
+                    "obs1_fixed": obs_fixed[1],
+                    "obs2_fixed": obs_fixed[2],
+                    "obs3_fixed": obs_fixed[3],
+                    "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+                    "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+                    "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
+                    "hl2_mem_mean": "",
+                    "hl2_mem_max": "",
+                    "hl2_mem_min": "",
+                    "q_read_timestep": _safe_int(dut.q_read_timestep),
+                    "q_state": q_state,
+                    "q_accum0": (
+                        _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else ""
+                    ),
+                    "q_accum1": (
+                        _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else ""
+                    ),
+                    "q_div0": (
+                        _safe_array_int(dut.q_accum, "q_divided", 0)
+                        if full_debug
+                        else ""
+                    ),
+                    "q_div1": (
+                        _safe_array_int(dut.q_accum, "q_divided", 1)
+                        if full_debug
+                        else ""
+                    ),
+                    "selected_action": "",
+                }
+            )
+            last_q_timestep = q_ts
+
+        if dut.done.value == 1:
+            break
+    else:
+        raise TimeoutError(f"Inference did not complete within {timeout_cycles} cycles")
+
+    action = int(dut.selected_action.value)
+    records.append(
+        {
+            "inference": inference_idx,
+            "cycle": cycle,
+            "stage": "final",
+            "timestep": "",
+            "fc2_idx": "",
+            "fc2_raw": "",
+            "fc2_signed": "",
+            "fc2_float": "",
+            "fc2_sat_pos": "",
+            "fc2_sat_neg": "",
+            "fc2_sat_pos_count": fc2_sat_pos_count,
+            "fc2_sat_neg_count": fc2_sat_neg_count,
+            "obs0": obs_floats[0],
+            "obs1": obs_floats[1],
+            "obs2": obs_floats[2],
+            "obs3": obs_floats[3],
+            "obs0_fixed": obs_fixed[0],
+            "obs1_fixed": obs_fixed[1],
+            "obs2_fixed": obs_fixed[2],
+            "obs3_fixed": obs_fixed[3],
+            "hl1_spike_count": _safe_hl1_spike_count(dut) if full_debug else "",
+            "hl1_t0_curr_sample": hl1_t0_curr_sample if full_debug else "",
+            "hl1_t0_spike_sample": hl1_t0_spike_sample if full_debug else "",
+            "hl2_mem_mean": "",
+            "hl2_mem_max": "",
+            "hl2_mem_min": "",
+            "q_read_timestep": _safe_int(dut.q_read_timestep),
+            "q_state": _safe_int(dut.q_accum.state),
+            "q_accum0": (
+                _safe_array_int(dut.q_accum, "q_accum", 0) if full_debug else ""
+            ),
+            "q_accum1": (
+                _safe_array_int(dut.q_accum, "q_accum", 1) if full_debug else ""
+            ),
+            "q_div0": (
+                _safe_array_int(dut.q_accum, "q_divided", 0) if full_debug else ""
+            ),
+            "q_div1": (
+                _safe_array_int(dut.q_accum, "q_divided", 1) if full_debug else ""
+            ),
+            "selected_action": action,
+        }
+    )
+
+    return action, records
 
 
 @cocotb.test()
@@ -171,24 +556,46 @@ async def test_cartpole_multiple_episodes(dut):
     # Create CartPole environment
     env = gym.make("CartPole-v1")
 
-    num_episodes = 10
-    episode_rewards = []
+    async def run_episode(seed: int) -> tuple[float, int]:
+        await reset_dut(dut)
 
-    for episode in range(num_episodes):
-        observation, info = env.reset(seed=episode * 7 + 42)
-
-        total_reward = 0
+        observation, _ = env.reset(seed=seed)
+        total_reward = 0.0
         step_count = 0
         max_steps = 500
 
         while step_count < max_steps:
             action = await run_inference(dut, observation)
-            observation, reward, terminated, truncated, info = env.step(action)
+            observation, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward
             step_count += 1
 
             if terminated or truncated:
                 break
+
+        return total_reward, step_count
+
+    # Repeatability check: same seed should produce nearly identical performance
+    # if there is no cross-episode state leakage in the DUT.
+    rep_seed = 42
+    rep_rewards = []
+    for idx in range(2):
+        reward, steps = await run_episode(rep_seed)
+        rep_rewards.append(reward)
+        dut._log.info(
+            f"Repeat seed check {idx + 1}: seed={rep_seed}, reward={reward} ({steps} steps)"
+        )
+
+    assert abs(rep_rewards[0] - rep_rewards[1]) <= 5.0, (
+        f"Same-seed repeatability failed (possible state carryover): "
+        f"{rep_rewards[0]} vs {rep_rewards[1]}"
+    )
+
+    num_episodes = 10
+    episode_rewards = []
+
+    for episode in range(num_episodes):
+        total_reward, step_count = await run_episode(seed=episode * 7 + 42)
 
         episode_rewards.append(total_reward)
         dut._log.info(
@@ -206,10 +613,10 @@ async def test_cartpole_multiple_episodes(dut):
     dut._log.info(f"  Min reward: {min_reward:.1f}")
     dut._log.info(f"  Max reward: {max_reward:.1f}")
 
-    # The trained model achieves ~495 average, so expect at least 400 average
+    expected_avg = 400
     assert (
-        avg_reward >= 300
-    ), f"Average reward too low: {avg_reward:.1f} (expected >= 300)"
+        avg_reward >= expected_avg
+    ), f"Average reward too low: {avg_reward:.1f} (expected >= {expected_avg})"
 
     dut._log.info(f"SUCCESS: Average reward {avg_reward:.1f} meets threshold")
 
@@ -267,25 +674,19 @@ async def test_inference_timing(dut):
 
 
 @cocotb.test()
-async def test_observation_range(dut):
+async def test_fc2_no_saturation_observation_ranges(dut):
     """
-    Test that the model handles the full CartPole observation range.
+    Verify FC2 does not saturate across representative observation ranges.
 
-    CartPole observations can have quite large values:
-    - Cart position: [-4.8, 4.8]
-    - Cart velocity: [-inf, inf] (typically small)
-    - Pole angle: [-0.418, 0.418] rad (~24 degrees)
-    - Pole velocity: [-inf, inf]
-
-    We test with various observation ranges to ensure the hardware
-    handles them correctly without overflow.
+    This is a stronger overflow-oriented check than action validity alone,
+    because selected_action being 0/1 does not guarantee intermediate math
+    stayed in range.
     """
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
 
-    # Test cases with various observation ranges
     test_cases = [
         ("Small values", np.array([0.01, 0.02, 0.03, 0.01])),
         ("Moderate values", np.array([0.5, -0.5, 0.2, -0.3])),
@@ -293,83 +694,225 @@ async def test_observation_range(dut):
         ("Edge of representable", np.array([3.0, -2.0, 0.4, -1.5])),
     ]
 
-    for name, obs in test_cases:
-        action = await run_inference(dut, obs)
+    for case_idx, (name, obs) in enumerate(test_cases):
+        action, records = await run_inference_with_timestep_snapshots(
+            dut,
+            obs,
+            inference_idx=case_idx,
+            full_debug=False,
+        )
 
         assert action in [0, 1], f"Invalid action: {action}"
+        assert records, f"No snapshot records captured for case: {name}"
 
-        dut._log.info(f"{name}: obs={obs}, action={action}")
+        final_record = next(
+            (r for r in reversed(records) if r["stage"] == "final"), None
+        )
+        assert (
+            final_record is not None
+        ), f"Missing final snapshot record for case: {name}"
 
-    dut._log.info("SUCCESS: All observation ranges handled correctly")
+        sat_pos = int(final_record["fc2_sat_pos_count"])
+        sat_neg = int(final_record["fc2_sat_neg_count"])
+
+        assert sat_pos == 0 and sat_neg == 0, (
+            f"FC2 saturation detected for {name}: "
+            f"sat_pos_count={sat_pos}, sat_neg_count={sat_neg}, obs={obs}"
+        )
+
+        dut._log.info(
+            f"{name}: obs={obs}, action={action}, "
+            f"fc2_sat_pos_count={sat_pos}, fc2_sat_neg_count={sat_neg}"
+        )
+
+    dut._log.info("SUCCESS: No FC2 saturation across tested observation ranges")
 
 
 @cocotb.test()
-async def test_debug_signals(dut):
+async def test_inference_state_leakage(dut):
     """
-    Debug test to trace internal signals and understand Q-value saturation.
+    Detect cross-inference state carryover using repeated identical observations.
 
-    This test runs inference with known inputs and logs internal signal values.
+    This is a focused dynamics test: repeated inferences with unchanged input
+    should produce identical action/Q signatures if per-inference state is
+    correctly reset/contained.
     """
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
     await reset_dut(dut)
 
-    # Use small observations that caused saturation
-    obs = np.array([0.01, 0.02, 0.03, 0.01])
+    obs = np.array([0.02, -0.03, 0.01, 0.04], dtype=np.float32)
 
-    # Set observations
-    for i in range(NUM_INPUTS):
-        fixed_val = float_to_fixed(float(obs[i]))
-        dut.observations[i].value = fixed_val
+    signatures = []
+    repeats = 6
+    for idx in range(repeats):
+        action, trace = await run_inference_with_trace(dut, obs)
+        sig = _trace_signature(action, trace)
+        signatures.append(sig)
         dut._log.info(
-            f"obs[{i}] = {obs[i]:.4f} -> fixed = {fixed_val} (hex: {fixed_val:04x})"
+            f"repeat={idx}: action={sig[0]}, q0={sig[1]}, q1={sig[2]}, "
+            f"hl2_mean={trace['hl2_mem_mean']}"
         )
 
-    # Start inference
-    dut.start.value = 1
-    await RisingEdge(dut.clk)
-    dut.start.value = 0
+    baseline = signatures[0]
+    mismatches = [
+        (i, sig) for i, sig in enumerate(signatures[1:], start=1) if sig != baseline
+    ]
 
-    # Log fc1 outputs as they become valid
-    fc1_outputs = []
-    fc1_count = 0
-    fc2_outputs = []
-    fc2_count = 0
+    assert not mismatches, (
+        "Cross-inference drift detected for fixed observation; "
+        f"baseline={baseline}, mismatches={mismatches[:3]}"
+    )
 
-    # Monitor fc1 output
-    for cycle in range(1000):
-        await RisingEdge(dut.clk)
+    await reset_dut(dut)
+    post_reset_action, post_reset_trace = await run_inference_with_trace(dut, obs)
+    post_reset_sig = _trace_signature(post_reset_action, post_reset_trace)
 
-        # Check fc1 progress
-        if hasattr(dut, "fc1_valid") and dut.fc1_valid.value == 1:
-            fc1_idx = int(dut.fc1_output_idx.value)
-            fc1_current = int(dut.fc1_output_current.value)
-            fc1_float = fixed_to_float(fc1_current)
-            fc1_outputs.append((fc1_idx, fc1_current, fc1_float))
-            fc1_count += 1
-            if fc1_count <= 5:  # Log first few
-                dut._log.info(
-                    f"fc1[{fc1_idx}] = {fc1_float:.4f} (hex: {fc1_current:04x})"
-                )
+    assert post_reset_sig == baseline, (
+        "Post-reset signature differs from initial baseline; "
+        f"baseline={baseline}, post_reset={post_reset_sig}"
+    )
 
-        if dut.done.value == 1:
+    dut._log.info("SUCCESS: No cross-inference state leakage for fixed observation")
+
+
+@cocotb.test()
+async def test_cartpole_action_trace(dut):
+    """Export deterministic hardware action traces for seeds 42 and 49."""
+    if not FULL_DEBUG:
+        cocotb.log.info("Skipping test_cartpole_action_trace (set FULL_DEBUG=1)")
+        return
+
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    env = gym.make("CartPole-v1")
+    seeds = [42, 49]
+    all_records = []
+
+    for seed in seeds:
+        records = await run_episode_trace(dut, env, seed=seed, max_steps=500)
+        all_records.extend(records)
+        dut._log.info(f"Trace seed={seed}: {len(records)} steps")
+
+    env.close()
+
+    results_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "results")
+    )
+    os.makedirs(results_dir, exist_ok=True)
+    out_csv = os.path.join(results_dir, "cartpole_action_trace_hw.csv")
+
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "seed",
+                "step",
+                "action",
+                "q0",
+                "q1",
+                "hl2_mem_mean",
+                "hl2_mem_max",
+                "hl2_mem_min",
+                "obs0",
+                "obs1",
+                "obs2",
+                "obs3",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(all_records)
+
+    dut._log.info(f"Wrote hardware action trace: {out_csv}")
+
+
+@cocotb.test()
+async def test_cartpole_timestep_snapshots(dut):
+    """Capture per-timestep fc2/HL2/Q snapshots for early seed-42 inferences."""
+    if not FULL_DEBUG:
+        cocotb.log.info(
+            "Skipping test_cartpole_timestep_snapshots (set FULL_DEBUG=1)"
+        )
+        return
+
+    clock = Clock(dut.clk, 10, unit="ns")
+    cocotb.start_soon(clock.start())
+
+    await reset_dut(dut)
+
+    env = gym.make("CartPole-v1")
+    observation, _ = env.reset(seed=42)
+
+    all_records = []
+    max_inferences = 5
+
+    for inference_idx in range(max_inferences):
+        action, records = await run_inference_with_timestep_snapshots(
+            dut,
+            observation,
+            inference_idx=inference_idx,
+            full_debug=FULL_DEBUG,
+        )
+        all_records.extend(records)
+
+        observation, _, terminated, truncated, _ = env.step(action)
+        if terminated or truncated:
             break
 
-    # Log hardware-selected action
-    hw_action = int(dut.selected_action.value)
-    dut._log.info(f"Hardware selected_action: {hw_action}")
+    env.close()
 
-    # Analyze fc1 outputs
-    if fc1_outputs:
-        fc1_values = [v[2] for v in fc1_outputs]
-        dut._log.info(
-            f"fc1 outputs: count={len(fc1_outputs)}, min={min(fc1_values):.4f}, max={max(fc1_values):.4f}"
+    results_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "results")
+    )
+    os.makedirs(results_dir, exist_ok=True)
+    out_csv = os.path.join(results_dir, "cartpole_timestep_snapshots_hw.csv")
+
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "inference",
+                "cycle",
+                "stage",
+                "timestep",
+                "fc2_idx",
+                "fc2_raw",
+                "fc2_signed",
+                "fc2_float",
+                "fc2_sat_pos",
+                "fc2_sat_neg",
+                "fc2_sat_pos_count",
+                "fc2_sat_neg_count",
+                "obs0",
+                "obs1",
+                "obs2",
+                "obs3",
+                "obs0_fixed",
+                "obs1_fixed",
+                "obs2_fixed",
+                "obs3_fixed",
+                "hl1_spike_count",
+                "hl1_t0_curr_sample",
+                "hl1_t0_spike_sample",
+                "hl2_mem_mean",
+                "hl2_mem_max",
+                "hl2_mem_min",
+                "q_read_timestep",
+                "q_state",
+                "q_accum0",
+                "q_accum1",
+                "q_div0",
+                "q_div1",
+                "selected_action",
+            ],
         )
-        # Log all fc1 outputs
-        for idx, raw, val in fc1_outputs[:10]:
-            dut._log.info(f"  fc1[{idx}] = {val:.4f}")
-    else:
-        dut._log.warning("No fc1 outputs captured (internal signal not accessible)")
+        writer.writeheader()
+        writer.writerows(all_records)
 
-    dut._log.info(f"Hardware selected_action: {hw_action}")
+    assert all_records, "No snapshot records captured"
+    dut._log.info(f"Snapshot full debug: {FULL_DEBUG}")
+    dut._log.info(f"Wrote timestep snapshots: {out_csv} ({len(all_records)} rows)")

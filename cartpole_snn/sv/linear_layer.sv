@@ -20,6 +20,7 @@ module linear_layer #(
     parameter NUM_INPUTS = 4,
     parameter NUM_OUTPUTS = 16,
     parameter DATA_WIDTH = 16,
+    parameter OUTPUT_WIDTH = DATA_WIDTH,
     parameter FRAC_BITS = 13,
     parameter WEIGHTS_FILE = "weights.mem",
     parameter BIAS_FILE = "bias.mem"
@@ -28,9 +29,12 @@ module linear_layer #(
     input wire reset,
     input wire start,
     input wire signed [DATA_WIDTH-1:0] inputs [0:NUM_INPUTS-1],
-    output logic signed [DATA_WIDTH-1:0] output_current,  // One current per cycle
+    output logic signed [OUTPUT_WIDTH-1:0] output_current, // One current per cycle
     output logic [$clog2(NUM_OUTPUTS)-1:0] output_idx,   // Which neuron (0 to NUM_OUTPUTS-1)
     output logic output_valid,                            // Current output is valid
+    // TODO: Add debug flags so these signals are only added in debug mode
+    output logic sat_pos,                                 // Current output saturated high
+    output logic sat_neg,                                 // Current output saturated low
     output logic done
 );
 
@@ -51,8 +55,8 @@ module linear_layer #(
     localparam ACCUM_WIDTH = 2 * DATA_WIDTH + $clog2(NUM_INPUTS + 1);
 
     // Saturation bounds
-    localparam signed [DATA_WIDTH-1:0] MAX_VAL = {1'b0, {(DATA_WIDTH-1){1'b1}}};  // 32767 for 16-bit
-    localparam signed [DATA_WIDTH-1:0] MIN_VAL = {1'b1, {(DATA_WIDTH-1){1'b0}}};  // -32768 for 16-bit
+    localparam signed [OUTPUT_WIDTH-1:0] MAX_VAL = {1'b0, {(OUTPUT_WIDTH-1){1'b1}}};
+    localparam signed [OUTPUT_WIDTH-1:0] MIN_VAL = {1'b1, {(OUTPUT_WIDTH-1){1'b0}}};
 
     // State machine
     typedef enum logic [1:0] {
@@ -69,11 +73,15 @@ module linear_layer #(
     // Combinational computation of current neuron's output
     logic signed [ACCUM_WIDTH-1:0] accum;
     logic signed [ACCUM_WIDTH-1:0] scaled;
-    logic signed [DATA_WIDTH-1:0] saturated;
+    logic signed [OUTPUT_WIDTH-1:0] saturated;
+    logic sat_pos_comb;
+    logic sat_neg_comb;
 
     always_comb begin
         // Compute weighted sum for current neuron: Σ(input[i] * weight[neuron_idx][i])
         accum = 0;
+        sat_pos_comb = 1'b0;
+        sat_neg_comb = 1'b0;
         for (int i = 0; i < NUM_INPUTS; i++) begin
             accum = accum + inputs_latched[i] * weights_flat[neuron_idx * NUM_INPUTS + i];
         end
@@ -84,12 +92,14 @@ module linear_layer #(
                           biases[neuron_idx]});
 
         // Saturate to output range
-        if (scaled > $signed({{(ACCUM_WIDTH-DATA_WIDTH){1'b0}}, MAX_VAL})) begin
+        if (scaled > $signed({{(ACCUM_WIDTH-OUTPUT_WIDTH){1'b0}}, MAX_VAL})) begin
             saturated = MAX_VAL;
-        end else if (scaled < $signed({{(ACCUM_WIDTH-DATA_WIDTH){1'b1}}, MIN_VAL})) begin
+            sat_pos_comb = 1'b1;
+        end else if (scaled < $signed({{(ACCUM_WIDTH-OUTPUT_WIDTH){1'b1}}, MIN_VAL})) begin
             saturated = MIN_VAL;
+            sat_neg_comb = 1'b1;
         end else begin
-            saturated = scaled[DATA_WIDTH-1:0];
+            saturated = scaled[OUTPUT_WIDTH-1:0];
         end
     end
 
@@ -100,6 +110,8 @@ module linear_layer #(
             neuron_idx <= '0;
             done <= 1'b0;
             output_valid <= 1'b0;
+            sat_pos <= 1'b0;
+            sat_neg <= 1'b0;
             output_current <= '0;
             output_idx <= '0;
             for (int i = 0; i < NUM_INPUTS; i++) begin
@@ -110,6 +122,8 @@ module linear_layer #(
                 IDLE: begin
                     done <= 1'b0;
                     output_valid <= 1'b0;
+                    sat_pos <= 1'b0;
+                    sat_neg <= 1'b0;
                     if (start) begin
                         // Latch inputs and start computation
                         for (int i = 0; i < NUM_INPUTS; i++) begin
@@ -125,6 +139,8 @@ module linear_layer #(
                     output_current <= saturated;
                     output_idx <= neuron_idx;
                     output_valid <= 1'b1;
+                    sat_pos <= sat_pos_comb;
+                    sat_neg <= sat_neg_comb;
 
                     // Check if this is the last neuron
                     if (neuron_idx == IDX_WIDTH'(NUM_OUTPUTS - 1)) begin

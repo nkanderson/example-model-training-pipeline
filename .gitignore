@@ -19,6 +19,7 @@ logs/
 sim_build/
 **/cocotb/**/dump.fst
 **/cocotb/**/results.xml
+**/cocotb/results/
 
 # Python
 venv/
