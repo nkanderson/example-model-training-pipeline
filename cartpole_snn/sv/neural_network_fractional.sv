@@ -33,6 +33,10 @@ module neural_network_fractional #(
     parameter NUM_TIMESTEPS = 30,
     // Fixed-point parameters
     parameter DATA_WIDTH = 16,
+    // FC2_OUTPUT_WIDTH is a transport/interface width (not fc2 internal accumulator width).
+    // linear_layer computes in a wider ACCUM_WIDTH, then saturates to OUTPUT_WIDTH.
+    // This width is carried on fc2_output_current -> hl2_currents -> fractional_lif.DATA_WIDTH.
+    // Choose the smallest width that avoids FC2 saturation for the target observation set.
     parameter FC2_OUTPUT_WIDTH = DATA_WIDTH,
     parameter MEMBRANE_WIDTH = 24,
     parameter FRAC_BITS = 13,

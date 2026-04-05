@@ -32,8 +32,10 @@ module fractional_lif #(
     // Relationship: λ = (1 - β) / β
     // C_SCALED in Q8.8: 1.0 * 256 = 256
     parameter [15:0] C_SCALED = 16'd256,
+    parameter integer C_SCALED_FRAC_BITS = 8,
     // INV_DENOM in Q0.16: 1/1.111 ≈ 0.9 * 65536 ≈ 58982
     parameter [15:0] INV_DENOM = 16'd58982,
+    parameter integer INV_DENOM_FRAC_BITS = 16,
     
     // Coefficient file (GL coefficient magnitudes |g_1| to |g_{H-1}|)
     parameter GL_COEFF_FILE = "gl_coefficients.mem"
@@ -76,13 +78,19 @@ module fractional_lif #(
     
     // History magnitude-weighted sum computation (Σ |g_k| * V[n-k] for k=1 to H-1)
     // This needs to be pipelined for large HISTORY_LENGTH, but for now use combinational
-    logic signed [47:0] history_sum;  // Wide accumulator for sum of products
-    localparam integer HISTORY_SUM_WIDTH = 48;
-    localparam integer C_SCALED_WIDTH = 17;
+    // Width derivation notes:
+    // - product = signed(hist_val) * unsigned(coeff_mag) => MEMBRANE_WIDTH + COEFF_WIDTH + 1 bits
+    // - summing up to (HISTORY_LENGTH-1) products needs ceil(log2(HISTORY_LENGTH-1)) guard bits
+    // - C_SCALED / INV_DENOM are stored as 16-bit unsigned params, prepended with 1 sign bit before multiply
+    localparam integer PRODUCT_WIDTH = MEMBRANE_WIDTH + COEFF_WIDTH + 1;
+    localparam integer HISTORY_SUM_WIDTH = PRODUCT_WIDTH + $clog2(HISTORY_LENGTH);
+    localparam integer C_SCALED_WIDTH = $bits(C_SCALED) + 1;
     localparam integer SCALED_HISTORY_WIDTH = HISTORY_SUM_WIDTH + C_SCALED_WIDTH;
-    localparam integer NUMERATOR_WIDTH = SCALED_HISTORY_WIDTH + 1;
-    localparam integer INV_DENOM_WIDTH = 17;
+    localparam integer NUMERATOR_INPUT_WIDTH = (SCALED_HISTORY_WIDTH > MEMBRANE_WIDTH) ? SCALED_HISTORY_WIDTH : MEMBRANE_WIDTH;
+    localparam integer NUMERATOR_WIDTH = NUMERATOR_INPUT_WIDTH + 1;
+    localparam integer INV_DENOM_WIDTH = $bits(INV_DENOM) + 1;
     localparam integer SCALED_RESULT_WIDTH = NUMERATOR_WIDTH + INV_DENOM_WIDTH;
+    logic signed [HISTORY_SUM_WIDTH-1:0] history_sum;  // Accumulator for sum of products
     localparam signed [MEMBRANE_WIDTH-1:0] MEMBRANE_MAX = {1'b0, {(MEMBRANE_WIDTH-1){1'b1}}};
     localparam signed [MEMBRANE_WIDTH-1:0] MEMBRANE_MIN = {1'b1, {(MEMBRANE_WIDTH-1){1'b0}}};
 
@@ -139,7 +147,8 @@ module fractional_lif #(
             product = $signed({1'b0, coeff_mag}) * hist_val;
 
             // Accumulate (sign-extend product to accumulator width)
-            history_sum = history_sum + {{(48-(MEMBRANE_WIDTH+COEFF_WIDTH+1)){product[MEMBRANE_WIDTH+COEFF_WIDTH]}}, product};
+            history_sum = history_sum +
+                          {{(HISTORY_SUM_WIDTH-PRODUCT_WIDTH){product[PRODUCT_WIDTH-1]}}, product};
         end
 
         // Step 2: Calculate reset subtraction (threshold if prev spike, else 0)
@@ -147,24 +156,24 @@ module fractional_lif #(
         reset_subtract = spike_prev ? MEMBRANE_WIDTH'($signed(THRESHOLD)) : '0;
 
         // Step 3: Compute V[n] = (I[n] + C * history_sum) / (C + λ)
-        // Using precomputed C_SCALED (Q8.8) and INV_DENOM (Q0.16)
+        // Using precomputed C_SCALED and INV_DENOM with explicit frac-bit parameters
         // 
-        // Numerator = current_extended + (C_SCALED * history_sum) >> 8
+        // Numerator = current_extended + (C_SCALED * history_sum) >> C_SCALED_FRAC_BITS
         // Then multiply by INV_DENOM and shift to get final membrane
         begin
-            // Scale history_sum by C (right shift by 8 for Q8.8, and by COEFF_FRAC_BITS for coeff format)
-            scaled_history = ($signed({1'b0, C_SCALED}) * history_sum) >>> (8 + COEFF_FRAC_BITS);
+            // Scale history_sum by C and remove fractional bits from both fixed-point factors
+            scaled_history = ($signed({1'b0, C_SCALED}) * history_sum) >>> (C_SCALED_FRAC_BITS + COEFF_FRAC_BITS);
 
             // Numerator = I[n] + C * Σ |g_k| * V[n-k]
             numerator = {{(NUMERATOR_WIDTH-MEMBRANE_WIDTH){current_extended[MEMBRANE_WIDTH-1]}}, current_extended} +
                        {{(NUMERATOR_WIDTH-SCALED_HISTORY_WIDTH){scaled_history[SCALED_HISTORY_WIDTH-1]}}, scaled_history};
 
             // Divide by (C + λ) via multiplication by 1/(C+λ) = INV_DENOM
-            // INV_DENOM is Q0.16, so result needs >> 16
+            // Remove INV_DENOM fractional bits after multiply
             scaled_result = numerator * $signed({1'b0, INV_DENOM});
 
             // Apply reset subtraction at wide precision, then saturate to membrane width
-            membrane_pre_reset = scaled_result >>> 16;
+            membrane_pre_reset = scaled_result >>> INV_DENOM_FRAC_BITS;
             membrane_after_reset = membrane_pre_reset -
                                    {{(SCALED_RESULT_WIDTH-MEMBRANE_WIDTH){reset_subtract[MEMBRANE_WIDTH-1]}}, reset_subtract};
 

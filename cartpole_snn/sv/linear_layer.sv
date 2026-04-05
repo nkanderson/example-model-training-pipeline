@@ -32,6 +32,7 @@ module linear_layer #(
     output logic signed [OUTPUT_WIDTH-1:0] output_current, // One current per cycle
     output logic [$clog2(NUM_OUTPUTS)-1:0] output_idx,   // Which neuron (0 to NUM_OUTPUTS-1)
     output logic output_valid,                            // Current output is valid
+    // TODO: Add debug flags so these signals are only added in debug mode
     output logic sat_pos,                                 // Current output saturated high
     output logic sat_neg,                                 // Current output saturated low
     output logic done
