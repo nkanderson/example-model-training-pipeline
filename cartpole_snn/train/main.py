@@ -216,6 +216,12 @@ if __name__ == "__main__":
         help="Optional path for training metrics CSV output",
     )
 
+    parser.add_argument(
+        "--save-final",
+        action="store_true",
+        help="Save final model checkpoint at end of training (default: disabled)",
+    )
+
     args = parser.parse_args()
 
     # Determine config file to use
@@ -320,6 +326,7 @@ if __name__ == "__main__":
     max_episode_steps = args.max_episode_steps
     save_plot_image = args.save_plot_image
     metrics_csv_arg = args.metrics_csv
+    save_final = args.save_final
 
     # Create surrogate gradient function
     spike_grad = surrogate.fast_sigmoid(slope=surrogate_gradient_slope)
@@ -757,13 +764,15 @@ if __name__ == "__main__":
     final_avg = sum(episode_durations[-min(len(episode_durations), 100) :]) / min(
         len(episode_durations), 100
     )
-    # Update agent's episode and avg_reward before saving
-    agent.episode = start_episode + num_episodes - 1
-    agent.avg_reward = final_avg
-    final_model_file = agent.save(final_model_filename)
 
     print("Complete")
-    print(f"Final model saved to: {final_model_file}")
+    if save_final:
+        # Update agent's episode and avg_reward before saving
+        agent.episode = start_episode + num_episodes - 1
+        agent.avg_reward = final_avg
+        final_model_file = agent.save(final_model_filename)
+        print(f"Final model saved to: {final_model_file}")
+
     if best_avg_reward > 0:
         print(
             f"Best model saved to: {best_model_filename} (avg reward: {best_avg_reward:.2f})"
