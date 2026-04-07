@@ -32,8 +32,6 @@ UNSIGNED_RANGE = 2**TOTAL_BITS
 
 # Test configuration (must match Verilog parameters)
 NUM_INPUTS = 4
-HL1_SIZE = 64
-HL2_SIZE = 16
 NUM_ACTIONS = 2
 NUM_TIMESTEPS = 30
 FULL_DEBUG = os.getenv("FULL_DEBUG", os.getenv("SNAPSHOT_FULL_DEBUG", "0")) == "1"
@@ -57,6 +55,28 @@ def to_signed(value: int, bits: int) -> int:
     if value >= (1 << (bits - 1)):
         value -= 1 << bits
     return value
+
+
+def get_hl1_size(dut) -> int:
+    """Best-effort: derive HL1 size from DUT handles."""
+    try:
+        return len(dut.hl1_spikes)
+    except Exception:
+        try:
+            return len(dut.hl1_currents)
+        except Exception:
+            return 0
+
+
+def get_hl2_size(dut) -> int:
+    """Best-effort: derive HL2 size from DUT handles."""
+    try:
+        return len(dut.hl2_membranes)
+    except Exception:
+        try:
+            return len(dut.hl2_spikes)
+        except Exception:
+            return 0
 
 
 async def reset_dut(dut):
@@ -114,7 +134,7 @@ async def run_inference_with_trace(
     action = await run_inference(dut, observations, timeout_cycles=timeout_cycles)
 
     hl2_vals = []
-    for i in range(HL2_SIZE):
+    for i in range(get_hl2_size(dut)):
         raw = int(dut.hl2_membranes[i].value)
         hl2_vals.append(to_signed(raw, 24))
 
@@ -337,7 +357,8 @@ async def run_inference_with_timestep_snapshots(
         if int(dut.fc2_done.value) == 1:
             ts = int(dut.current_timestep.value)
             hl2_mem_vals = [
-                to_signed(int(dut.hl2_membranes[i].value), 24) for i in range(HL2_SIZE)
+                to_signed(int(dut.hl2_membranes[i].value), 24)
+                for i in range(get_hl2_size(dut))
             ]
             records.append(
                 {
@@ -834,9 +855,7 @@ async def test_cartpole_action_trace(dut):
 async def test_cartpole_timestep_snapshots(dut):
     """Capture per-timestep fc2/HL2/Q snapshots for early seed-42 inferences."""
     if not FULL_DEBUG:
-        cocotb.log.info(
-            "Skipping test_cartpole_timestep_snapshots (set FULL_DEBUG=1)"
-        )
+        cocotb.log.info("Skipping test_cartpole_timestep_snapshots (set FULL_DEBUG=1)")
         return
 
     clock = Clock(dut.clk, 10, unit="ns")
