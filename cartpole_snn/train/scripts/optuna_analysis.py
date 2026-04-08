@@ -38,7 +38,7 @@ HL2_KEYS = [
     "layer2",
     "layer_2",
 ]
-HIST_KEYS = ["hist", "history", "history_length", "history_len", "h"]
+HIST_KEYS = ["hist", "history", "history_length", "history_len"]
 
 
 def _extract_int_from_value(v: Any) -> Optional[int]:
