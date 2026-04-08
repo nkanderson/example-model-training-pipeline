@@ -11,6 +11,10 @@ training:
   tau: 0.005947146767703459
   lr: 0.0002323688288061343
   num_episodes: 1000
+  eval_every_episodes: 50 # Run fixed-seed evaluation every N training episodes
+  eval_num_episodes: 30 # Number of episodes for each fixed-seed evaluation
+  eval_seed_base: 42 # First evaluation seed
+  eval_seed_stride: 7 # Seed increment between evaluation episodes
 snn:
   num_steps: 50
   beta: 0.8374903577180667
