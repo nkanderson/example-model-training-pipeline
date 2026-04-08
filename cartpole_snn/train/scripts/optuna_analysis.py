@@ -11,11 +11,7 @@ import argparse
 import re
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
-
-try:
-    import optuna
-except Exception as e:  # pragma: no cover - runtime environment dependent
-    raise RuntimeError("optuna must be installed to run this script") from e
+import optuna
 
 
 HL1_KEYS = [
@@ -190,6 +186,52 @@ def main() -> None:
             print(
                 f"  trial#{t['trial_number']:3d} value={t['value']:.3f} hl1={t['hl1']} hl2={t['hl2']} history={t['history']} total={t['total_neurons']}"
             )
+
+    summaries = out["trial_summaries"]
+
+    # Trial with smallest total neurons (if hl1/hl2 are available)
+    total_candidates = [t for t in summaries if t["total_neurons"] is not None]
+    if total_candidates:
+        best_smallest_total = min(
+            total_candidates,
+            key=lambda t: (
+                t["total_neurons"],
+                -float(t["value"]),
+                t["history"] if t["history"] is not None else 10**9,
+                t["trial_number"],
+            ),
+        )
+        print("\nSmallest-neuron successful trial:")
+        print(
+            f"  Trial #{best_smallest_total['trial_number']} | "
+            f"Reward: {best_smallest_total['value']:.3f} | "
+            f"HL1: {best_smallest_total['hl1']} | "
+            f"HL2: {best_smallest_total['hl2']} | "
+            f"Total neurons: {best_smallest_total['total_neurons']} | "
+            f"History length: {best_smallest_total['history']}"
+        )
+
+    # Trial with shortest history (if history is present), tie-break by smallest total neurons
+    history_candidates = [t for t in summaries if t["history"] is not None]
+    if history_candidates:
+        best_shortest_history = min(
+            history_candidates,
+            key=lambda t: (
+                t["history"],
+                -float(t["value"]),
+                t["total_neurons"] if t["total_neurons"] is not None else 10**9,
+                t["trial_number"],
+            ),
+        )
+        print("\nShortest-history successful trial:")
+        print(
+            f"  Trial #{best_shortest_history['trial_number']} | "
+            f"Reward: {best_shortest_history['value']:.3f} | "
+            f"HL1: {best_shortest_history['hl1']} | "
+            f"HL2: {best_shortest_history['hl2']} | "
+            f"Total neurons: {best_shortest_history['total_neurons']} | "
+            f"History length: {best_shortest_history['history']}"
+        )
 
 
 if __name__ == "__main__":
