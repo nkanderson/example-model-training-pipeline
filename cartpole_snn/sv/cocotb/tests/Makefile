@@ -4,6 +4,7 @@
 #   make                                 # Run LIF tests (default)
 #   make test_lif                        # Run LIF (single-step) tests
 #   make test_fractional_lif             # Run fractional_lif (single-step) tests
+#   make test_bitshift_lif               # Run bitshift_lif (single-step) tests
 #   make test_lif_timestep               # Run LIF with internal timestep loop tests
 #   make test_linear_layer               # Run linear_layer tests
 #   make test_spike_buffer               # Run spike_buffer tests
@@ -35,6 +36,26 @@ else ifeq ($(TEST),fractional_lif_hist64)
     VERILOG_SOURCES = $(PWD)/../sv/fractional_lif.sv
     TOPLEVEL = fractional_lif
     MODULE = test_fractional_lif
+else ifeq ($(TEST),bitshift_lif)
+    VERILOG_SOURCES = $(PWD)/../sv/bitshift_lif.sv
+    TOPLEVEL = bitshift_lif
+    MODULE = test_bitshift_lif
+else ifeq ($(TEST),bitshift_lif_mode0)
+    VERILOG_SOURCES = $(PWD)/../sv/bitshift_lif.sv
+    TOPLEVEL = bitshift_lif
+    MODULE = test_bitshift_lif
+else ifeq ($(TEST),bitshift_lif_mode1)
+    VERILOG_SOURCES = $(PWD)/../sv/bitshift_lif.sv
+    TOPLEVEL = bitshift_lif
+    MODULE = test_bitshift_lif
+else ifeq ($(TEST),bitshift_lif_mode2)
+    VERILOG_SOURCES = $(PWD)/../sv/bitshift_lif.sv
+    TOPLEVEL = bitshift_lif
+    MODULE = test_bitshift_lif
+else ifeq ($(TEST),bitshift_lif_mode3)
+    VERILOG_SOURCES = $(PWD)/../sv/bitshift_lif.sv
+    TOPLEVEL = bitshift_lif
+    MODULE = test_bitshift_lif
 else ifeq ($(TEST),linear_layer)
     VERILOG_SOURCES = $(PWD)/../sv/linear_layer.sv
     TOPLEVEL = linear_layer
@@ -104,7 +125,7 @@ else ifeq ($(TEST),cartpole_integration_fractional_hist256)
     TOPLEVEL = neural_network_fractional
     MODULE = test_cartpole_integration
 else
-    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_hist64', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', 'cartpole_integration_fractional_hist8', or 'cartpole_integration_fractional_hist256')
+    $(error Unknown TEST value: $(TEST). Use 'lif', 'fractional_lif', 'fractional_lif_hist64', 'bitshift_lif', 'bitshift_lif_mode0', 'bitshift_lif_mode1', 'bitshift_lif_mode2', 'bitshift_lif_mode3', 'lif_timestep', 'linear_layer', 'spike_buffer', 'spike_buffer_staggered', 'membrane_buffer', 'neuron_membrane_buffer', 'q_accumulator', 'neural_network', 'cartpole_integration', 'cartpole_integration_fractional', 'cartpole_integration_fractional_hist8', or 'cartpole_integration_fractional_hist256')
 endif
 
 # Simulator - use Icarus for all tests (event-driven, correct timing)
@@ -138,6 +159,36 @@ ifeq ($(SIM),icarus)
         COMPILE_ARGS += -Pfractional_lif.COEFF_WIDTH=16 -Pfractional_lif.COEFF_FRAC_BITS=15
         COMPILE_ARGS += -Pfractional_lif.C_SCALED=256 -Pfractional_lif.INV_DENOM=58988
         COMPILE_ARGS += -Pfractional_lif.GL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
+    endif
+    ifeq ($(TEST),bitshift_lif)
+        COMPILE_ARGS += -Pbitshift_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pbitshift_lif.SHIFT_WIDTH=8 -Pbitshift_lif.SHIFT_MODE=3
+        COMPILE_ARGS += -Pbitshift_lif.CUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -Pbitshift_lif.C_SCALED=256 -Pbitshift_lif.INV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode0)
+        COMPILE_ARGS += -Pbitshift_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pbitshift_lif.SHIFT_WIDTH=8 -Pbitshift_lif.SHIFT_MODE=0
+        COMPILE_ARGS += -Pbitshift_lif.CUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -Pbitshift_lif.C_SCALED=256 -Pbitshift_lif.INV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode1)
+        COMPILE_ARGS += -Pbitshift_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pbitshift_lif.SHIFT_WIDTH=8 -Pbitshift_lif.SHIFT_MODE=1
+        COMPILE_ARGS += -Pbitshift_lif.CUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -Pbitshift_lif.C_SCALED=256 -Pbitshift_lif.INV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode2)
+        COMPILE_ARGS += -Pbitshift_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pbitshift_lif.SHIFT_WIDTH=8 -Pbitshift_lif.SHIFT_MODE=2
+        COMPILE_ARGS += -Pbitshift_lif.CUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -Pbitshift_lif.C_SCALED=256 -Pbitshift_lif.INV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode3)
+        COMPILE_ARGS += -Pbitshift_lif.HISTORY_LENGTH=64
+        COMPILE_ARGS += -Pbitshift_lif.SHIFT_WIDTH=8 -Pbitshift_lif.SHIFT_MODE=3
+        COMPILE_ARGS += -Pbitshift_lif.CUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -Pbitshift_lif.C_SCALED=256 -Pbitshift_lif.INV_DENOM=58982
     endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -Pmembrane_buffer.NUM_NEURONS=4 -Pmembrane_buffer.NUM_TIMESTEPS=3
@@ -259,6 +310,36 @@ ifeq ($(SIM),verilator)
         COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58988
         COMPILE_ARGS += -GGL_COEFF_FILE=\"$(PWD)/weights/fractional_order/gl_coefficients.mem\"
     endif
+    ifeq ($(TEST),bitshift_lif)
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GSHIFT_WIDTH=8 -GSHIFT_MODE=3
+        COMPILE_ARGS += -GCUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode0)
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GSHIFT_WIDTH=8 -GSHIFT_MODE=0
+        COMPILE_ARGS += -GCUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode1)
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GSHIFT_WIDTH=8 -GSHIFT_MODE=1
+        COMPILE_ARGS += -GCUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode2)
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GSHIFT_WIDTH=8 -GSHIFT_MODE=2
+        COMPILE_ARGS += -GCUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58982
+    endif
+    ifeq ($(TEST),bitshift_lif_mode3)
+        COMPILE_ARGS += -GHISTORY_LENGTH=64
+        COMPILE_ARGS += -GSHIFT_WIDTH=8 -GSHIFT_MODE=3
+        COMPILE_ARGS += -GCUSTOM_DECAY_RATE=3
+        COMPILE_ARGS += -GC_SCALED=256 -GINV_DENOM=58982
+    endif
     ifeq ($(TEST),membrane_buffer)
         COMPILE_ARGS += -GNUM_NEURONS=4 -GNUM_TIMESTEPS=3
     endif
@@ -375,6 +456,25 @@ test_fractional_lif:
 test_fractional_lif_hist64:
 	$(MAKE) TEST=fractional_lif_hist64
 
+test_bitshift_lif:
+	$(MAKE) TEST=bitshift_lif
+
+# SHIFT_MODE=0 (simple): [0,1,2,3,...]
+test_bitshift_lif_mode0:
+	$(MAKE) TEST=bitshift_lif_mode0
+
+# SHIFT_MODE=1 (slow_decay): [0,1,1,2,2,3,3,...]
+test_bitshift_lif_mode1:
+	$(MAKE) TEST=bitshift_lif_mode1
+
+# SHIFT_MODE=2 (custom): [0,1,3,4,5xR,6xR,...], R=CUSTOM_DECAY_RATE
+test_bitshift_lif_mode2:
+	$(MAKE) TEST=bitshift_lif_mode2
+
+# SHIFT_MODE=3 (custom_slow_decay): [0,1,3,4,5x3,6x4,7x5,...]
+test_bitshift_lif_mode3:
+	$(MAKE) TEST=bitshift_lif_mode3
+
 test_lif_timestep:
 	$(MAKE) TEST=lif_timestep
 
@@ -417,4 +517,4 @@ clean::
 	rm -rf __pycache__
 	rm -rf .pytest_cache
 
-.PHONY: clean test_lif test_fractional_lif test_fractional_lif_hist64 test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8 test_cartpole_integration_fractional_hist256
+.PHONY: clean test_lif test_fractional_lif test_fractional_lif_hist64 test_bitshift_lif test_bitshift_lif_mode0 test_bitshift_lif_mode1 test_bitshift_lif_mode2 test_bitshift_lif_mode3 test_lif_timestep test_linear_layer test_spike_buffer test_spike_buffer_staggered test_membrane_buffer test_neuron_membrane_buffer test_q_accumulator test_neural_network test_cartpole_integration test_cartpole_integration_fractional test_cartpole_integration_fractional_hist8 test_cartpole_integration_fractional_hist256
