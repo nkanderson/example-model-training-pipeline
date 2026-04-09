@@ -17,7 +17,11 @@ module bitshift_lif #(
 	// Bit-shift approximation parameters
 	parameter HISTORY_LENGTH = 64,
 	parameter SHIFT_WIDTH = 8,
-	// 0=simple, 1=slow_decay, 2=custom, 3=custom_slow_decay
+	// SHIFT_MODE selection (compile-time):
+	//   0: simple            -> [0,1,2,3,4,...]
+	//   1: slow_decay        -> [0,1,1,2,2,3,3,...]
+	//   2: custom            -> [0,1,3,4,5xR,6xR,...], R=CUSTOM_DECAY_RATE
+	//   3: custom_slow_decay -> [0,1,3,4,5x3,6x4,7x5,...]
 	parameter [1:0] SHIFT_MODE = 2'd3,
 	parameter integer CUSTOM_DECAY_RATE = 3,
 
