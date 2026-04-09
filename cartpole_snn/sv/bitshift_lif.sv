@@ -64,39 +64,41 @@ module bitshift_lif #(
 	logic signed [MEMBRANE_WIDTH-1:0] reset_subtract;
 	logic next_spike;
 	logic signed [HISTORY_SUM_WIDTH-1:0] history_sum;
+	logic signed [MEMBRANE_WIDTH-1:0] history_shifted_terms [0:HISTORY_LENGTH-2];
 
-	function automatic integer get_shift_amount(input integer idx);
+	function automatic integer get_shift_amount_const(input integer idx);
 		integer rem;
 		integer shift;
 		integer repeat_count;
+		integer found;
 		begin
 			case (SHIFT_MODE)
 				// simple_bitshift: [0,1,2,3,...]
 				2'd0: begin
-					get_shift_amount = idx;
+					get_shift_amount_const = idx;
 				end
 
 				// slow_decay_bitshift: [0,1,1,2,2,3,3,...]
 				2'd1: begin
 					if (idx == 0) begin
-						get_shift_amount = 0;
+						get_shift_amount_const = 0;
 					end else begin
-						get_shift_amount = (idx + 1) / 2;
+						get_shift_amount_const = (idx + 1) / 2;
 					end
 				end
 
 				// custom_bitshift: [0,1,3,4,5,5,5,6,6,6,...]
 				2'd2: begin
 					if (idx == 0) begin
-						get_shift_amount = 0;
+						get_shift_amount_const = 0;
 					end else if (idx == 1) begin
-						get_shift_amount = 1;
+						get_shift_amount_const = 1;
 					end else if (idx == 2) begin
-						get_shift_amount = 3;
+						get_shift_amount_const = 3;
 					end else if (idx == 3) begin
-						get_shift_amount = 4;
+						get_shift_amount_const = 4;
 					end else begin
-						get_shift_amount = 5 + ((idx - 4) / CUSTOM_DECAY_RATE);
+						get_shift_amount_const = 5 + ((idx - 4) / CUSTOM_DECAY_RATE);
 					end
 				end
 
@@ -104,43 +106,63 @@ module bitshift_lif #(
 				// [0,1,3,4,5x3,6x4,7x5,...] where shift N repeats (N-2) times
 				default: begin
 					if (idx == 0) begin
-						get_shift_amount = 0;
+						get_shift_amount_const = 0;
 					end else if (idx == 1) begin
-						get_shift_amount = 1;
+						get_shift_amount_const = 1;
 					end else if (idx == 2) begin
-						get_shift_amount = 3;
+						get_shift_amount_const = 3;
 					end else if (idx == 3) begin
-						get_shift_amount = 4;
+						get_shift_amount_const = 4;
 					end else begin
 						rem = idx - 4;
 						shift = 5;
-						repeat_count = 3;
-						while (rem >= repeat_count) begin
-							rem = rem - repeat_count;
-							shift = shift + 1;
-							repeat_count = repeat_count + 1;
+						found = 0;
+						for (int s = 5; s <= ((1 << SHIFT_WIDTH) - 1); s++) begin
+							repeat_count = s - 2;
+							if ((found == 0) && (rem < repeat_count)) begin
+								shift = s;
+								found = 1;
+							end else if (found == 0) begin
+								rem = rem - repeat_count;
+							end
 						end
-						get_shift_amount = shift;
+						get_shift_amount_const = shift;
 					end
 				end
 			endcase
 
-			if (get_shift_amount < 0) begin
-				get_shift_amount = 0;
+			if (get_shift_amount_const < 0) begin
+				get_shift_amount_const = 0;
 			end
-			if (get_shift_amount > ((1 << SHIFT_WIDTH) - 1)) begin
-				get_shift_amount = (1 << SHIFT_WIDTH) - 1;
+			if (get_shift_amount_const > ((1 << SHIFT_WIDTH) - 1)) begin
+				get_shift_amount_const = (1 << SHIFT_WIDTH) - 1;
 			end
 		end
 	endfunction
 
+	// Build per-tap shifted history terms with compile-time constant shift amounts.
+	// This avoids runtime shift-pattern selection logic in the datapath.
+	generate
+		for (genvar gi = 0; gi < HISTORY_LENGTH - 1; gi++) begin : gen_history_terms
+			localparam integer SHIFT_AMT = get_shift_amount_const(gi + 1);
+			always_comb begin
+				logic [ADDR_WIDTH-1:0] k_plus_1;
+				logic [ADDR_WIDTH-1:0] hist_idx_g;
+
+				k_plus_1 = ADDR_WIDTH'(gi + 1);
+				if (history_ptr >= k_plus_1) begin
+					hist_idx_g = history_ptr - k_plus_1;
+				end else begin
+					hist_idx_g = history_ptr + ADDR_WIDTH'(HISTORY_LENGTH) - k_plus_1;
+				end
+
+				history_shifted_terms[gi] = history_buffer[hist_idx_g] >>> SHIFT_AMT;
+			end
+		end
+	endgenerate
+
 	// Combinational next-state computation
 	always_comb begin
-		logic [ADDR_WIDTH-1:0] hist_idx;
-		logic [ADDR_WIDTH-1:0] k_plus_1;
-		integer shift_amount;
-		logic signed [MEMBRANE_WIDTH-1:0] hist_val;
-		logic signed [MEMBRANE_WIDTH-1:0] shifted_hist;
 		logic signed [SCALED_HISTORY_WIDTH-1:0] scaled_history;
 		logic signed [NUMERATOR_WIDTH-1:0] numerator;
 		logic signed [SCALED_RESULT_WIDTH-1:0] scaled_result;
@@ -167,21 +189,9 @@ module bitshift_lif #(
 		current_extended = {{(MEMBRANE_WIDTH-DATA_WIDTH){current[DATA_WIDTH-1]}}, current};
 
 		// Step 1: Sum shifted history terms for k=1..H-1
-		// history_ptr points to oldest entry, V[n-1] is at history_ptr-1
 		for (int k = 0; k < HISTORY_LENGTH - 1; k++) begin
-			k_plus_1 = ADDR_WIDTH'(k + 1);
-			if (history_ptr >= k_plus_1) begin
-				hist_idx = history_ptr - k_plus_1;
-			end else begin
-				hist_idx = history_ptr + ADDR_WIDTH'(HISTORY_LENGTH) - k_plus_1;
-			end
-
-			hist_val = history_buffer[hist_idx];
-			shift_amount = get_shift_amount(k + 1);
-			shifted_hist = hist_val >>> shift_amount;
-
 			history_sum = history_sum +
-						  {{(HISTORY_SUM_WIDTH-MEMBRANE_WIDTH){shifted_hist[MEMBRANE_WIDTH-1]}}, shifted_hist};
+						  {{(HISTORY_SUM_WIDTH-MEMBRANE_WIDTH){history_shifted_terms[k][MEMBRANE_WIDTH-1]}}, history_shifted_terms[k]};
 		end
 
 		// Step 2: Delayed reset subtraction (lif.sv style)
