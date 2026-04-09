@@ -5,6 +5,7 @@ Usage examples:
   python analyze_optuna_study.py --study-name fractional-1000ep
   python analyze_optuna_study.py --study-name fractional-1000ep --storage sqlite:///optuna_studies/fractional.db --threshold 450 --print-trials
 """
+
 from __future__ import annotations
 
 import argparse
@@ -60,11 +61,14 @@ def _find_param(params: Dict[str, Any], candidates: Iterable[str]) -> Optional[i
                 val = _extract_int_from_value(params[key])
                 if val is not None:
                     return val
-    # try fuzzy match by substring
+    # try conservative fuzzy match by token overlap (avoids accidental matches
+    # like 'h' hitting unrelated params such as batch_size/hidden_size)
     for key in params.keys():
         lk = key.lower()
+        tokens = [tok for tok in re.split(r"[^a-z0-9]+", lk) if tok]
         for cand in candidates:
-            if cand.lower() in lk:
+            cl = cand.lower()
+            if cl in tokens:
                 val = _extract_int_from_value(params[key])
                 if val is not None:
                     return val
@@ -72,7 +76,9 @@ def _find_param(params: Dict[str, Any], candidates: Iterable[str]) -> Optional[i
 
 
 def analyze(study: optuna.study.Study, threshold: float) -> Dict[str, Any]:
-    success_trials = [t for t in study.trials if t.value is not None and t.value >= threshold]
+    success_trials = [
+        t for t in study.trials if t.value is not None and t.value >= threshold
+    ]
     results: Dict[str, Any] = {}
     results["n_success"] = len(success_trials)
     if not success_trials:
@@ -201,7 +207,19 @@ def main() -> None:
                 t["trial_number"],
             ),
         )
-        print("\nSmallest-neuron successful trial:")
+        best_smallest_total_history_first = min(
+            total_candidates,
+            key=lambda t: (
+                t["total_neurons"],
+                t["history"] if t["history"] is not None else 10**9,
+                -float(t["value"]),
+                t["trial_number"],
+            ),
+        )
+
+        print(
+            "\nSmallest-neuron successful trial (priority: neurons -> reward -> history):"
+        )
         print(
             f"  Trial #{best_smallest_total['trial_number']} | "
             f"Reward: {best_smallest_total['value']:.3f} | "
@@ -210,11 +228,25 @@ def main() -> None:
             f"Total neurons: {best_smallest_total['total_neurons']} | "
             f"History length: {best_smallest_total['history']}"
         )
+        print(
+            "\nSmallest-neuron successful trial "
+            "(priority: neurons -> history -> reward):"
+        )
+        print(
+            f"  Trial #{best_smallest_total_history_first['trial_number']} | "
+            f"Reward: {best_smallest_total_history_first['value']:.3f} | "
+            f"HL1: {best_smallest_total_history_first['hl1']} | "
+            f"HL2: {best_smallest_total_history_first['hl2']} | "
+            f"Total neurons: {best_smallest_total_history_first['total_neurons']} | "
+            f"History length: {best_smallest_total_history_first['history']}"
+        )
 
-    # Trial with shortest history (if history is present), tie-break by smallest total neurons
+    # Trial with shortest history (if history is present)
+    # Priority A (current): history -> reward -> total neurons -> trial number
+    # Priority B (alternate): history -> total neurons -> reward -> trial number
     history_candidates = [t for t in summaries if t["history"] is not None]
     if history_candidates:
-        best_shortest_history = min(
+        best_shortest_history_reward_first = min(
             history_candidates,
             key=lambda t: (
                 t["history"],
@@ -223,15 +255,70 @@ def main() -> None:
                 t["trial_number"],
             ),
         )
-        print("\nShortest-history successful trial:")
-        print(
-            f"  Trial #{best_shortest_history['trial_number']} | "
-            f"Reward: {best_shortest_history['value']:.3f} | "
-            f"HL1: {best_shortest_history['hl1']} | "
-            f"HL2: {best_shortest_history['hl2']} | "
-            f"Total neurons: {best_shortest_history['total_neurons']} | "
-            f"History length: {best_shortest_history['history']}"
+        best_shortest_history_neurons_first = min(
+            history_candidates,
+            key=lambda t: (
+                t["history"],
+                t["total_neurons"] if t["total_neurons"] is not None else 10**9,
+                -float(t["value"]),
+                t["trial_number"],
+            ),
         )
+
+        print(
+            "\nShortest-history successful trial (priority: history -> reward -> neurons):"
+        )
+        print(
+            f"  Trial #{best_shortest_history_reward_first['trial_number']} | "
+            f"Reward: {best_shortest_history_reward_first['value']:.3f} | "
+            f"HL1: {best_shortest_history_reward_first['hl1']} | "
+            f"HL2: {best_shortest_history_reward_first['hl2']} | "
+            f"Total neurons: {best_shortest_history_reward_first['total_neurons']} | "
+            f"History length: {best_shortest_history_reward_first['history']}"
+        )
+        print(
+            "\nShortest-history successful trial "
+            "(priority: history -> neurons -> reward):"
+        )
+        print(
+            f"  Trial #{best_shortest_history_neurons_first['trial_number']} | "
+            f"Reward: {best_shortest_history_neurons_first['value']:.3f} | "
+            f"HL1: {best_shortest_history_neurons_first['hl1']} | "
+            f"HL2: {best_shortest_history_neurons_first['hl2']} | "
+            f"Total neurons: {best_shortest_history_neurons_first['total_neurons']} | "
+            f"History length: {best_shortest_history_neurons_first['history']}"
+        )
+
+        compact_history_candidates = [
+            t
+            for t in summaries
+            if t["history"] is not None
+            and t["total_neurons"] is not None
+            and t["history"] < 32
+            and t["total_neurons"] < 48
+        ]
+        print(
+            "\nSuccessful trials with history < 32 and total neurons < 48: "
+            f"{len(compact_history_candidates)}"
+        )
+        if compact_history_candidates:
+            for t in sorted(
+                compact_history_candidates,
+                key=lambda x: (
+                    -float(x["value"]),
+                    x["total_neurons"],
+                    x["history"],
+                    x["trial_number"],
+                ),
+            ):
+                print(
+                    f"  Trial #{t['trial_number']} | "
+                    f"Reward: {t['value']:.3f} | "
+                    f"HL1: {t['hl1']} | "
+                    f"HL2: {t['hl2']} | "
+                    f"Total neurons: {t['total_neurons']} | "
+                    f"History length: {t['history']}"
+                )
 
 
 if __name__ == "__main__":
